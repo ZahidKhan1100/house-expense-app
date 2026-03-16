@@ -1,19 +1,12 @@
 import { useState } from "react";
 import { ScrollView, StyleSheet, Dimensions } from "react-native";
 import { TextInput, Button, Text, Title } from "react-native-paper";
-import { createUserWithEmailAndPassword } from "firebase/auth";
-import { auth, db } from "../../../firebase";
-import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import {
-  doc,
-  setDoc,
-  collection,
-  addDoc,
-  query,
-  where,
-  getDocs,
-} from "firebase/firestore";
+import { useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
+
+import { signup } from "../../../src/services/authService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const { width } = Dimensions.get("window");
 
@@ -28,7 +21,6 @@ export default function Signup() {
 
   const handleSignup = async () => {
     setError("");
-
     if (!name || !email || !password) {
       setError("Please fill all fields!");
       return;
@@ -37,105 +29,41 @@ export default function Signup() {
     setLoading(true);
 
     try {
-      console.log("STEP 1: Creating auth user...");
+      const payload: any = { name, email, password };
+      if (houseCode.trim()) payload.house_code = houseCode.trim();
 
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password,
-      );
+      // Call signup API
+      const data = await signup(payload);
 
-      const user = userCredential.user;
-
-      console.log("STEP 2: Auth created:", user.uid);
-
-      // ==========================
-      // CASE 1: USER ENTERED CODE
-      // ==========================
-      if (houseCode.trim()) {
-        console.log("STEP 3: Searching house by code...");
-
-        const houseQuery = query(
-          collection(db, "houses"),
-          where("code", "==", houseCode.trim().toUpperCase()),
+      // --- Case 1: Join request pending ---
+      if (houseCode.trim() && !data.token) {
+        await AsyncStorage.setItem(
+          "user",
+          JSON.stringify(data.user || { name, email }),
         );
-
-        const houseSnap = await getDocs(houseQuery);
-
-        console.log("STEP 4: House query result:", houseSnap.size);
-
-        if (houseSnap.empty) {
-          throw new Error("Invalid house code!");
-        }
-
-        const houseDoc = houseSnap.docs[0];
-        const houseId = houseDoc.id;
-
-        console.log("STEP 5: Creating user doc...");
-
-        await setDoc(doc(db, "users", user.uid), {
-          name,
-          email: email.toLowerCase(),
-          role: "mate",
-          status: "pending",
-          houseId: "",
-          createdAt: new Date(),
-        });
-
-        console.log("STEP 6: User document created");
-
-        console.log("STEP 7: Creating join request...");
-
-        await addDoc(collection(db, "houses", houseId, "joinRequests"), {
-          userId: user.uid,
-          name,
-          email: email.toLowerCase(),
-          requestedAt: new Date(),
-        });
-
-        console.log("STEP 8: Join request created");
-
         router.replace("/pending");
         return;
       }
 
-      // ==========================
-      // CREATE NEW HOUSE
-      // ==========================
+      // --- Case 2: House created, token returned ---
+      if (data.token) {
+        await AsyncStorage.setItem("token", data.token);
 
-      console.log("STEP 3: Creating house...");
+        // Store user + house info
+        const userData = {
+          id: data.house.admin_id,
+          name: name,
+          email,
+        };
+        await AsyncStorage.setItem("user", JSON.stringify(userData));
 
-      const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        router.replace("/(tabs)/dashboard");
+        return;
+      }
 
-      const houseRef = await addDoc(collection(db, "houses"), {
-        name: `${name}'s House`,
-        code: newCode,
-        adminId: user.uid,
-        mates: [user.uid],
-        createdAt: new Date(),
-      });
-
-      console.log("STEP 4: House created:", houseRef.id);
-
-      console.log("STEP 5: Creating user document...");
-
-      await setDoc(doc(db, "users", user.uid), {
-        name,
-        email: email.toLowerCase(),
-        role: "admin",
-        status: "admin",
-        houseId: houseRef.id,
-        createdAt: new Date(),
-      });
-
-      console.log("STEP 6: User document created");
-
-      router.replace("/(tabs)/dashboard");
+      setError("Signup failed. Please try again.");
     } catch (err: any) {
       console.error("🔥 SIGNUP ERROR:", err);
-      console.error("🔥 ERROR CODE:", err.code);
-      console.error("🔥 ERROR MESSAGE:", err.message);
-
       setError(err.message || "Signup failed");
     } finally {
       setLoading(false);
@@ -148,7 +76,7 @@ export default function Signup() {
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
-        <Title style={styles.title}>Create Account</Title>
+        <Text style={styles.title}>Create Account</Text>
         <Text style={styles.subtitle}>
           Start tracking expenses with your mates
         </Text>

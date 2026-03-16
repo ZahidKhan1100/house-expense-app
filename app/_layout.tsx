@@ -1,10 +1,12 @@
-// app/_layout.tsx
-import { Slot, Redirect } from "expo-router";
+import { Slot } from "expo-router";
 import { useEffect, useState } from "react";
 import { View, ActivityIndicator } from "react-native";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { auth } from "../firebase"; 
-import 'react-native-reanimated';
+import { auth } from "../firebase";
+import { ThemeProvider } from "./theme/ThemeContext";
+import "react-native-gesture-handler";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import Toast from "react-native-toast-message";
 
 export default function RootLayout() {
   const [user, setUser] = useState<User | null>(null);
@@ -15,18 +17,34 @@ export default function RootLayout() {
       setUser(authenticatedUser);
       setLoading(false);
     });
+
     return unsubscribe;
   }, []);
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#4F46E5" />
-      </View>
+      <ThemeProvider>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <View
+            style={{
+              flex: 1,
+              justifyContent: "center",
+              alignItems: "center",
+            }}
+          >
+            <ActivityIndicator size="large" color="#4F46E5" />
+          </View>
+        </GestureHandlerRootView>
+      </ThemeProvider>
     );
   }
 
-  // If there is no user, and we aren't already in the auth group, 
-  // Redirect will handle the logic. But for a simple setup:
-  return <Slot />;
+  return (
+    <ThemeProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <Slot />
+        <Toast />
+      </GestureHandlerRootView>
+    </ThemeProvider>
+  );
 }

@@ -10,18 +10,10 @@ import {
   StyleSheet,
 } from "react-native";
 import { FontAwesome5 } from "@expo/vector-icons";
-import { auth, db } from "../../firebase";
-import {
-  collection,
-  getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  getDoc,
-} from "firebase/firestore";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { apiClient } from "../../src/utils/apiClient";
 
 const iconOptions = [
   "shopping-cart",
@@ -34,36 +26,52 @@ const iconOptions = [
 ];
 
 export default function ManageCategories() {
-  const [houseId, setHouseId] = useState<string | null>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [newName, setNewName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("shopping-cart");
   const [editingCategory, setEditingCategory] = useState<any>(null);
   const [confirmModal, setConfirmModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   const router = useRouter();
 
-  // Fetch user's house and categories
+  // Get token & user info
+  const getAuthData = async () => {
+    const userJson = await AsyncStorage.getItem("user");
+    const token = await AsyncStorage.getItem("token");
+    const user = userJson ? JSON.parse(userJson) : null;
+    return { user, token };
+  };
+
+  // Fetch categories
+  const fetchCategories = async () => {
+    try {
+      const { token } = await getAuthData();
+      if (!token) return;
+
+      const cats = await apiClient("/categories", "GET", undefined, token);
+      setCategories(cats);
+    } catch (err: any) {
+      console.error("Failed to fetch categories:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
-      const user = auth.currentUser;
-      if (!user) return;
-
-      const userSnap = await getDoc(doc(db, "users", user.uid));
-      const house = userSnap.data()?.houseId;
-      if (!house) return;
-
-      setHouseId(house);
-      fetchCategories(house);
+      const { user } = await getAuthData();
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+      setCurrentUser(user);
+      fetchCategories();
     };
     init();
   }, []);
-
-  const fetchCategories = async (house: string) => {
-    const snap = await getDocs(collection(db, "houses", house, "categories"));
-    setCategories(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-  };
 
   const openModal = (category?: any) => {
     if (category) {
@@ -79,38 +87,48 @@ export default function ManageCategories() {
   };
 
   const saveCategory = async () => {
-    if (!newName.trim() || !houseId) return;
+    if (!newName.trim()) return;
 
     try {
+      const { token } = await getAuthData();
+      if (!token) return;
+
       if (editingCategory) {
-        await updateDoc(
-          doc(db, "houses", houseId, "categories", editingCategory.id),
-          {
-            name: newName,
-            icon: selectedIcon,
-          },
+        // Update
+        await apiClient(
+          `/categories/${editingCategory.id}`,
+          "PUT",
+          { name: newName, icon: selectedIcon },
+          token,
         );
       } else {
-        await addDoc(collection(db, "houses", houseId, "categories"), {
-          name: newName,
-          icon: selectedIcon,
-          createdAt: new Date(),
-        });
+        // Create
+        await apiClient(
+          "/categories",
+          "POST",
+          { name: newName, icon: selectedIcon },
+          token,
+        );
       }
 
-      fetchCategories(houseId);
+      fetchCategories();
       setModalVisible(false);
       setConfirmModal(true);
-    } catch (err) {
-      console.log(err);
+    } catch (err: any) {
+      console.error("Failed to save category:", err);
     }
   };
 
   const confirmDelete = async (category: any) => {
-    if (!houseId) return;
+    try {
+      const { token } = await getAuthData();
+      if (!token) return;
 
-    await deleteDoc(doc(db, "houses", houseId, "categories", category.id));
-    fetchCategories(houseId);
+      await apiClient(`/categories/${category.id}`, "DELETE", undefined, token);
+      fetchCategories();
+    } catch (err: any) {
+      console.error("Failed to delete category:", err);
+    }
   };
 
   const resetForm = () => {
@@ -141,6 +159,13 @@ export default function ManageCategories() {
     </View>
   );
 
+  if (loading)
+    return (
+      <Text style={{ flex: 1, textAlign: "center", marginTop: 20 }}>
+        Loading...
+      </Text>
+    );
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
       <View style={styles.container}>
@@ -154,7 +179,7 @@ export default function ManageCategories() {
 
         <FlatList
           data={categories}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.id.toString()}
           renderItem={renderCategory}
           ListEmptyComponent={<Text>No categories yet</Text>}
         />
@@ -318,7 +343,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   modalBtnText: { color: "#fff", fontWeight: "bold" },
-
   backBtn: {
     marginBottom: 20,
     paddingVertical: 10,
@@ -327,9 +351,5 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignSelf: "flex-start",
   },
-  backBtnText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
+  backBtnText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
 });

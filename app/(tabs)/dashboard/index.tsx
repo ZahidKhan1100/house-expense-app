@@ -10,142 +10,138 @@ import {
 } from "react-native";
 import { MaterialIcons, FontAwesome5 } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import Animated, { FadeInUp } from "react-native-reanimated";
+import Animated, {
+  FadeInUp,
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+} from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { auth, db } from "../../../firebase";
-import { doc, getDoc, getDocs, collection } from "firebase/firestore";
+import Toast from "react-native-toast-message";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+import { useTheme } from "../../theme/ThemeContext";
+import { apiClient } from "../../../src/utils/apiClient";
 
 const { width } = Dimensions.get("window");
 const isWeb = Platform.OS === "web";
 
 interface CategoryExpense {
-  id: string;
+  id: number;
   name: string;
   icon: string;
   total: number;
 }
 
+interface DashboardResponse {
+  user: {
+    id: number;
+    name: string;
+    email: string;
+    house_id: number;
+    role: string;
+    status: string;
+  };
+  currency: string;
+  total_spent: number;
+  category_expenses: CategoryExpense[];
+}
+
 export default function Dashboard() {
   const router = useRouter();
+  const { isDark } = useTheme();
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [expenses, setExpenses] = useState<CategoryExpense[]>([]);
   const [totalSpent, setTotalSpent] = useState(0);
-  const [currency, setCurrency] = useState("$"); // default
+  const [currency, setCurrency] = useState("$");
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (!user) {
-        router.replace("/login");
-        return;
-      }
-
+    const fetchDashboard = async () => {
       try {
-        const userSnap = await getDoc(doc(db, "users", user.uid));
-        if (!userSnap.exists()) return;
-
-        const data = userSnap.data();
-        setIsAdmin(data.role === "admin");
-
-        if (!data.houseId) {
-          router.replace("/pending");
+        const token = await AsyncStorage.getItem("token");
+        if (!token) {
+          router.replace("/login");
           return;
         }
 
-        const houseId = data.houseId;
-
-        // Fetch house data for currency
-        const houseSnap = await getDoc(doc(db, "houses", houseId));
-        if (houseSnap.exists()) {
-          const houseData = houseSnap.data();
-          setCurrency(houseData.currency || "$");
-        }
-
-        // Fetch all expenses
-        const expenseSnap = await getDocs(
-          collection(db, "houses", houseId, "expenses"),
+        const data: DashboardResponse = await apiClient(
+          "/dashboard",
+          "GET",
+          undefined,
+          token,
         );
-        const allExpenses = expenseSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
 
-        // Fetch categories
-        const catSnap = await getDocs(
-          collection(db, "houses", houseId, "categories"),
-        );
-        const categories = catSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-        // Aggregate expenses by category
-        const categoryTotals: { [key: string]: CategoryExpense } = {};
-        let totalSum = 0;
-
-        allExpenses.forEach((exp) => {
-          const cat = categories.find((c) => c.id === exp.categoryId);
-          if (!cat) return;
-
-          totalSum += exp.amount;
-
-          if (!categoryTotals[cat.id]) {
-            categoryTotals[cat.id] = {
-              id: cat.id,
-              name: cat.name,
-              icon: cat.icon || "tag",
-              total: 0,
-            };
-          }
-
-          categoryTotals[cat.id].total += exp.amount;
+        setIsAdmin(data.user.role === "admin");
+        setCurrency(data.currency || "$");
+        setTotalSpent(data.total_spent || 0);
+        setExpenses(data.category_expenses || []);
+      } catch (err: any) {
+        console.error("Dashboard API error:", err.message);
+        Toast.show({
+          type: "error",
+          text1: "Failed to fetch dashboard",
+          text2: err.message,
         });
-
-        setExpenses(Object.values(categoryTotals));
-        setTotalSpent(totalSum);
-      } catch (err) {
-        console.error("Dashboard fetch error:", err);
       } finally {
         setLoading(false);
       }
+    };
+
+    fetchDashboard();
+  }, []);
+
+  const handleAction = (route: string, label: string) => {
+    Toast.show({
+      type: "success",
+      text1: label,
     });
 
-    return () => unsubscribe();
-  }, []);
+    router.push(route as any);
+  };
 
   if (loading)
     return (
-      <View style={styles.loading}>
-        <Text>Loading...</Text>
+      <View
+        style={[
+          styles.loading,
+          { backgroundColor: isDark ? "#121212" : "#F5F5F5" },
+        ]}
+      >
+        <Text style={{ color: isDark ? "#fff" : "#000" }}>Loading...</Text>
       </View>
     );
 
   const actions = [
     {
       label: "Add Expense",
-      icon: <FontAwesome5 name="plus-circle" size={30} color="#fff" />,
+      icon: <FontAwesome5 name="plus-circle" size={28} color="#fff" />,
       bgColor: "#FF6A6A",
-      onPress: () => router.push("/expenses/addExpense"),
+      route: "/expenses/addExpense",
     },
     {
       label: "Add Payment",
-      icon: <MaterialIcons name="payment" size={30} color="#fff" />,
+      icon: <MaterialIcons name="payment" size={28} color="#fff" />,
       bgColor: "#6A8DFF",
-      onPress: () => console.log("Add Payment clicked"),
+      route: "/payments",
     },
   ];
 
   if (isAdmin) {
     actions.push(
       {
-        label: "Add Mate",
-        icon: <MaterialIcons name="person-add" size={30} color="#fff" />,
+        label: "Manage Mate",
+        icon: <MaterialIcons name="person-add" size={28} color="#fff" />,
         bgColor: "#FF1493",
-        onPress: () => router.push("/house/addMate"),
+        route: "/house/addMate",
       },
       {
         label: "Categories",
-        icon: <MaterialIcons name="category" size={30} color="#fff" />,
+        icon: <MaterialIcons name="category" size={28} color="#fff" />,
         bgColor: "#6A8DFF",
-        onPress: () => router.push("/categories/manage"),
+        route: "/categories/manage",
       },
     );
   }
@@ -156,82 +152,69 @@ export default function Dashboard() {
     rows.push(actions.slice(i, i + buttonsPerRow));
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={{
-          paddingBottom: Platform.OS === "ios" ? 120 : 110,
-        }}
-      >
-        {/* Home Summary */}
-        <LinearGradient
-          colors={["#FF6A6A", "#FFB88C"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.homeCard}
-        >
-          <Text style={styles.homeTitle}>My Home</Text>
-          <Text style={styles.homeBalance}>
-            {currency}
-            {totalSpent.toFixed(2)}
-          </Text>
-          <Text style={styles.homeSubtitle}>Total Spent</Text>
-        </LinearGradient>
+  const stylesDynamic = createStyles(isDark);
 
-        {/* Expenses by Category */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Expenses by Category</Text>
-          {expenses.length === 0 && (
-            <Text style={{ color: "#666" }}>No expenses yet</Text>
-          )}
+  return (
+    <SafeAreaView style={stylesDynamic.container}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+        {/* SUMMARY CARD */}
+        <Animated.View entering={FadeInUp.duration(500)}>
+          <LinearGradient
+            colors={["#FF6A6A", "#FFB88C"]}
+            style={stylesDynamic.homeCard}
+          >
+            <Text style={stylesDynamic.homeTitle}>My Home</Text>
+            <Text style={stylesDynamic.homeBalance}>
+              {currency}
+              {totalSpent.toFixed(2)}
+            </Text>
+            <Text style={stylesDynamic.homeSubtitle}>Total Spent</Text>
+          </LinearGradient>
+        </Animated.View>
+
+        {/* CATEGORY EXPENSES */}
+        <View style={stylesDynamic.section}>
+          <Text style={stylesDynamic.sectionTitle}>Expenses by Category</Text>
+
           {expenses.map((expense, index) => (
             <Animated.View
               key={expense.id}
-              entering={FadeInUp.delay(50 * index)}
+              entering={FadeInUp.delay(index * 80)}
             >
-              <LinearGradient
-                colors={["#FFF5F5", "#FFEAEA"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.expenseCard}
-              >
-                <View style={styles.iconCircle}>
+              <View style={stylesDynamic.expenseCard}>
+                <View style={stylesDynamic.iconCircle}>
                   <FontAwesome5
                     name={expense.icon as any}
-                    size={22}
+                    size={20}
                     color="#FF6A6A"
                   />
                 </View>
+
                 <View style={{ flex: 1, marginLeft: 15 }}>
-                  <Text style={styles.expenseTitle}>{expense.name}</Text>
+                  <Text style={stylesDynamic.expenseTitle}>{expense.name}</Text>
                 </View>
-                <Text style={styles.expenseAmount}>
+
+                <Text style={stylesDynamic.expenseAmount}>
                   {currency}
                   {expense.total.toFixed(2)}
                 </Text>
-              </LinearGradient>
+              </View>
             </Animated.View>
           ))}
         </View>
 
-        {/* Quick Actions */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
+        {/* QUICK ACTIONS */}
+        <View style={stylesDynamic.section}>
+          <Text style={stylesDynamic.sectionTitle}>Quick Actions</Text>
+
           {rows.map((row, idx) => (
-            <View key={idx} style={styles.actionsRow}>
+            <View key={idx} style={stylesDynamic.actionsRow}>
               {row.map((action) => (
-                <TouchableOpacity
+                <ActionButton
                   key={action.label}
-                  style={[
-                    styles.actionButton,
-                    { backgroundColor: action.bgColor },
-                  ]}
-                  onPress={action.onPress}
-                >
-                  {action.icon}
-                  <Text style={styles.actionLabel}>{action.label}</Text>
-                </TouchableOpacity>
+                  action={action}
+                  onPress={() => handleAction(action.route, action.label)}
+                />
               ))}
             </View>
           ))}
@@ -241,68 +224,111 @@ export default function Dashboard() {
   );
 }
 
+/* Animated Button */
+function ActionButton({ action, onPress }: any) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const handlePress = () => {
+    scale.value = withSpring(0.9);
+    setTimeout(() => (scale.value = withSpring(1)), 120);
+    onPress();
+  };
+
+  return (
+    <Animated.View style={[{ flex: 1, marginHorizontal: 5 }, animatedStyle]}>
+      <TouchableOpacity
+        style={[styles.actionButton, { backgroundColor: action.bgColor }]}
+        onPress={handlePress}
+      >
+        {action.icon}
+        <Text style={styles.actionLabel}>{action.label}</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+/* Styles */
+const createStyles = (isDark: boolean) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: isDark ? "#121212" : "#F5F5F5",
+    },
+    loading: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    homeCard: {
+      margin: 20,
+      borderRadius: 20,
+      padding: 25,
+    },
+    homeTitle: {
+      color: "#fff",
+      fontSize: 22,
+      fontWeight: "600",
+    },
+    homeBalance: {
+      color: "#fff",
+      fontSize: 36,
+      fontWeight: "700",
+      marginVertical: 5,
+    },
+    homeSubtitle: {
+      color: "#fff",
+    },
+    section: {
+      paddingHorizontal: 20,
+      marginTop: 10,
+    },
+    sectionTitle: {
+      fontSize: 20,
+      fontWeight: "700",
+      marginBottom: 15,
+      color: isDark ? "#fff" : "#222",
+    },
+    expenseCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      padding: 15,
+      borderRadius: 16,
+      marginBottom: 12,
+      backgroundColor: isDark ? "#1E1E1E" : "#fff",
+    },
+    iconCircle: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: "#FFEAEA",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    expenseTitle: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: isDark ? "#fff" : "#333",
+    },
+    expenseAmount: {
+      fontWeight: "700",
+      color: "#FF6A6A",
+    },
+    actionsRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginBottom: 10,
+    },
+  });
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F5F5F5" },
-  loading: { flex: 1, justifyContent: "center", alignItems: "center" },
-  homeCard: {
-    margin: 20,
-    borderRadius: 20,
-    padding: 25,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 5 },
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  homeTitle: { color: "#fff", fontSize: 22, fontWeight: "600" },
-  homeBalance: {
-    color: "#fff",
-    fontSize: 36,
-    fontWeight: "700",
-    marginVertical: 5,
-  },
-  homeSubtitle: { color: "#fff", fontSize: 14 },
-  section: { paddingHorizontal: 20, marginTop: 20 },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    marginBottom: 15,
-    color: "#222",
-  },
-  expenseCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 15,
-    borderRadius: 20,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 5,
-    elevation: 2,
-  },
-  iconCircle: {
-    width: 45,
-    height: 45,
-    borderRadius: 25,
-    backgroundColor: "#FFEAEA",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  expenseTitle: { fontSize: 16, fontWeight: "600", color: "#333" },
-  expenseAmount: { fontSize: 16, fontWeight: "700", color: "#FF6A6A" },
-  actionsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
   actionButton: {
-    flex: 1,
     height: 90,
     borderRadius: 15,
     justifyContent: "center",
     alignItems: "center",
-    marginHorizontal: 5,
   },
   actionLabel: {
     color: "#fff",

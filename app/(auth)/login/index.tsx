@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { View, StyleSheet, Dimensions, ScrollView } from "react-native";
 import { TextInput, Button, Text, Title } from "react-native-paper";
-import { signInWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../../../firebase";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { doc, getDoc } from "firebase/firestore";
-import { db } from "../../../firebase";
+import { login } from "../../../src/services/authService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const { width, height } = Dimensions.get("window");
 
@@ -15,40 +13,32 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     setError("");
+    setLoading(true);
 
     try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password,
-      );
+      const data = await login({ email, password });
 
-      const user = userCredential.user;
+      // Save token or user info if needed
+      // e.g., AsyncStorage.setItem("token", data.token);
 
-      // Fetch user document
-      const userDoc = await getDoc(doc(db, "users", user.uid));
+      await AsyncStorage.setItem("token", data.token);
+      await AsyncStorage.setItem("user", JSON.stringify(data.user));
 
-      if (!userDoc.exists()) {
-        setError("User profile not found.");
-        return;
-      }
-
-      const userData = userDoc.data();
-
-      // Check status
-      if (userData.status === "pending") {
+      // Check user status
+      if (data.user.status === "pending") {
         router.replace("/pending");
-        return;
+      } else {
+        router.replace("/(tabs)/dashboard");
       }
-
-      // Approved users
-      router.replace("/(tabs)/dashboard");
     } catch (err: any) {
       console.error(err);
-      setError("Failed to login. Check your credentials!");
+      setError(err.message || "Failed to login. Check your credentials!");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -60,8 +50,7 @@ export default function Login() {
       end={{ x: 1, y: 1 }}
     >
       <ScrollView contentContainerStyle={styles.container}>
-        {/* Header Title */}
-        <Title style={styles.title}>Welcome Back!</Title>
+        <Text style={styles.title}>Welcome Back!</Text>
         <Text style={styles.subtitle}>
           Log in to continue managing your house
         </Text>
@@ -96,6 +85,8 @@ export default function Login() {
         <Button
           mode="contained"
           onPress={handleLogin}
+          loading={loading}
+          disabled={loading}
           style={styles.button}
           contentStyle={styles.buttonContent}
           labelStyle={{ color: "#FF6A6A", fontWeight: "bold", fontSize: 16 }}
@@ -113,7 +104,6 @@ export default function Login() {
         </Button>
       </ScrollView>
 
-      {/* Optional floating shapes or curves */}
       <View style={styles.circleTop} />
       <View style={styles.circleBottom} />
     </LinearGradient>
@@ -121,44 +111,14 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
-  gradient: {
-    flex: 1,
-    width,
-    height,
-  },
-  container: {
-    flexGrow: 1,
-    justifyContent: "center",
-    padding: 25,
-  },
-  title: {
-    fontSize: 36,
-    fontWeight: "bold",
-    color: "#fff",
-    marginBottom: 8,
-  },
-  subtitle: {
-    color: "rgba(255,255,255,0.9)",
-    marginBottom: 25,
-  },
-  input: {
-    marginBottom: 15,
-    backgroundColor: "transparent",
-    color: "#fff",
-  },
-  button: {
-    borderRadius: 12,
-    marginTop: 10,
-  },
-  buttonContent: {
-    backgroundColor: "#fff",
-    paddingVertical: 8,
-  },
-  error: {
-    color: "#FFD2D2",
-    marginBottom: 10,
-    textAlign: "center",
-  },
+  gradient: { flex: 1, width, height },
+  container: { flexGrow: 1, justifyContent: "center", padding: 25 },
+  title: { fontSize: 36, fontWeight: "bold", color: "#fff", marginBottom: 8 },
+  subtitle: { color: "rgba(255,255,255,0.9)", marginBottom: 25 },
+  input: { marginBottom: 15, backgroundColor: "transparent", color: "#fff" },
+  button: { borderRadius: 12, marginTop: 10 },
+  buttonContent: { backgroundColor: "#fff", paddingVertical: 8 },
+  error: { color: "#FFD2D2", marginBottom: 10, textAlign: "center" },
   circleTop: {
     position: "absolute",
     width: 200,

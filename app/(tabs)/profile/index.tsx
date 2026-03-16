@@ -6,103 +6,148 @@ import {
   TouchableOpacity,
   Alert,
   StyleSheet,
+  Switch,
+  ActivityIndicator,
 } from "react-native";
-import { auth, db } from "../../../firebase";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
-import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useTheme } from "../../theme/ThemeContext";
+import { apiClient } from "../../../src/utils/apiClient"; // your API helper
 
 export default function Profile() {
   const router = useRouter();
+  const { isDark, toggleTheme } = useTheme();
+
+  const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState<any>(null);
   const [houseName, setHouseName] = useState("");
-  const [currency, setCurrency] = useState("$"); // default $
+  const [currency, setCurrency] = useState("$");
   const [editingHouse, setEditingHouse] = useState(false);
   const [editingCurrency, setEditingCurrency] = useState(false);
 
-  const uid = auth.currentUser?.uid;
+  // --- AsyncStorage helper ---
+  const getAuthData = async () => {
+    const userJson = await AsyncStorage.getItem("user");
+    const token = await AsyncStorage.getItem("token");
+    const user = userJson ? JSON.parse(userJson) : null;
+    return { user, token };
+  };
 
-  // Fetch user and house data
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!uid) return;
-      const userSnap = await getDoc(doc(db, "users", uid));
-      if (userSnap.exists()) {
-        const data = userSnap.data();
-        setUserData(data);
-
-        if (data.houseId) {
-          const houseSnap = await getDoc(doc(db, "houses", data.houseId));
-          if (houseSnap.exists()) {
-            const houseData = houseSnap.data();
-            setHouseName(houseData.name);
-            setCurrency(houseData.currency || "$");
-          }
-        }
+  // --- Fetch profile + house info ---
+  const fetchProfile = async () => {
+    setLoading(true);
+    try {
+      const { token } = await getAuthData();
+      if (!token) {
+        router.replace("/login");
+        return;
       }
-    };
-    fetchData();
-  }, [uid]);
 
-  // Update house name
+      const profile = await apiClient("/profile", "GET", undefined, token);
+      setUserData(profile);
+
+      if (profile.house) {
+        setHouseName(profile.house.name);
+        setCurrency(profile.house.currency || "$");
+      }
+    } catch (err: any) {
+      console.error("Profile fetch error:", err);
+      alert(err.message || "Failed to load profile");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchProfile();
+  }, []);
+
+  // --- Save updates ---
   const saveHouseName = async () => {
-    if (!houseName.trim())
-      return Alert.alert("Error", "House name cannot be empty");
+    if (!houseName.trim()) return alert("House name cannot be empty");
+
     try {
-      await updateDoc(doc(db, "houses", userData.houseId), { name: houseName });
+      const { token } = await getAuthData();
+      await apiClient(
+        `/houses/${userData.house.id}`,
+        "PUT",
+        { name: houseName },
+        token,
+      );
       setEditingHouse(false);
-      Alert.alert("Success", "House name updated!");
-    } catch (error) {
-      console.log(error);
-      Alert.alert("Error", "Failed to update house name");
+      alert("House name updated!");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to update house name");
     }
   };
 
-  // Update currency
   const saveCurrency = async () => {
-    if (!currency.trim())
-      return Alert.alert("Error", "Currency cannot be empty");
+    if (!currency.trim()) return alert("Currency cannot be empty");
+
     try {
-      await updateDoc(doc(db, "houses", userData.houseId), { currency });
+      const { token } = await getAuthData();
+      await apiClient(
+        `/houses/${userData.house.id}`,
+        "PUT",
+        { currency },
+        token,
+      );
       setEditingCurrency(false);
-      Alert.alert("Success", "Currency updated!");
-    } catch (error) {
-      console.log(error);
-      Alert.alert("Error", "Failed to update currency");
+      alert("Currency updated!");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to update currency");
     }
   };
 
-  // Logout
   const handleLogout = async () => {
-    await auth.signOut();
+    await AsyncStorage.multiRemove(["user", "token"]);
     router.replace("/login");
   };
 
-  if (!userData) return null;
+  if (loading || !userData)
+    return (
+      <ActivityIndicator style={{ flex: 1 }} size="large" color="#FF6A6A" />
+    );
 
   const isAdmin = userData.role === "admin";
+  const styles = createStyles(isDark);
 
   return (
-         <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
-    
-      <Text style={styles.header}>Profile</Text>
+    <SafeAreaView style={styles.container}>
+      {/* HEADER */}
+      <LinearGradient colors={["#FF6A6A", "#FF8E8E"]} style={styles.header}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {userData.name.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+        <Text style={styles.name}>{userData.name}</Text>
+        <Text style={styles.email}>{userData.email}</Text>
+      </LinearGradient>
 
+      {/* ACCOUNT CARD */}
       <View style={styles.card}>
-        <Text style={styles.label}>Name</Text>
-        <Text style={styles.value}>{userData.name}</Text>
+        <Text style={styles.sectionTitle}>Account</Text>
 
-        <Text style={styles.label}>Email</Text>
-        <Text style={styles.value}>{userData.email}</Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>Role</Text>
+          <Text style={styles.value}>{userData.role.toUpperCase()}</Text>
+        </View>
 
-        <Text style={styles.value}>
-          {userData?.role ? userData.role.toUpperCase() : "N/A"}
-        </Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>Dark Mode</Text>
+          <Switch value={isDark} onValueChange={toggleTheme} />
+        </View>
 
         {isAdmin && (
           <>
-            {/* House Name */}
-            <Text style={[styles.label, { marginTop: 20 }]}>House Name</Text>
+            <Text style={styles.sectionTitle}>House</Text>
+
+            <Text style={styles.label}>House Name</Text>
             {editingHouse ? (
               <>
                 <TextInput
@@ -118,7 +163,7 @@ export default function Profile() {
                 </TouchableOpacity>
               </>
             ) : (
-              <>
+              <View style={styles.row}>
                 <Text style={styles.value}>{houseName}</Text>
                 <TouchableOpacity
                   style={styles.editBtn}
@@ -126,11 +171,10 @@ export default function Profile() {
                 >
                   <Text style={styles.editText}>Edit</Text>
                 </TouchableOpacity>
-              </>
+              </View>
             )}
 
-            {/* Currency */}
-            <Text style={[styles.label, { marginTop: 20 }]}>Currency</Text>
+            <Text style={styles.label}>Currency</Text>
             {editingCurrency ? (
               <>
                 <TextInput
@@ -143,7 +187,7 @@ export default function Profile() {
                 </TouchableOpacity>
               </>
             ) : (
-              <>
+              <View style={styles.row}>
                 <Text style={styles.value}>{currency}</Text>
                 <TouchableOpacity
                   style={styles.editBtn}
@@ -151,7 +195,7 @@ export default function Profile() {
                 >
                   <Text style={styles.editText}>Edit</Text>
                 </TouchableOpacity>
-              </>
+              </View>
             )}
           </>
         )}
@@ -164,56 +208,81 @@ export default function Profile() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  header: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "black",
-    marginBottom: 20,
-  },
-  card: {
-    backgroundColor: "white",
-    borderRadius: 16,
-    padding: 20,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  label: { fontSize: 14, color: "#777", marginTop: 10 },
-  value: { fontSize: 18, fontWeight: "600", color: "#333" },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 5,
-    fontSize: 16,
-    color: "#333",
-  },
-  editBtn: {
-    marginTop: 10,
-    backgroundColor: "#FF6A6A",
-    padding: 10,
-    borderRadius: 8,
-    alignSelf: "flex-start",
-  },
-  editText: { color: "white", fontWeight: "bold" },
-  saveBtn: {
-    marginTop: 10,
-    backgroundColor: "#FF6A6A",
-    padding: 10,
-    borderRadius: 8,
-    alignSelf: "flex-start",
-  },
-  saveText: { color: "white", fontWeight: "bold" },
-  logoutBtn: {
-    marginTop: 30,
-    backgroundColor: "#FF6A6A",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  logoutText: { color: "white", fontSize: 16, fontWeight: "bold" },
-});
+const createStyles = (isDark: boolean) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: isDark ? "#121212" : "#F5F7FB" },
+    header: {
+      alignItems: "center",
+      paddingVertical: 40,
+      borderBottomLeftRadius: 30,
+      borderBottomRightRadius: 30,
+    },
+    avatar: {
+      width: 90,
+      height: 90,
+      borderRadius: 45,
+      backgroundColor: "white",
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 10,
+    },
+    avatarText: { fontSize: 36, fontWeight: "bold", color: "#FF6A6A" },
+    name: { fontSize: 22, fontWeight: "bold", color: "white" },
+    email: { color: "white", opacity: 0.9, marginTop: 4 },
+    card: {
+      margin: 20,
+      backgroundColor: isDark ? "#1E1E1E" : "white",
+      borderRadius: 20,
+      padding: 20,
+      shadowColor: "#000",
+      shadowOpacity: 0.1,
+      shadowRadius: 10,
+      elevation: 5,
+    },
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: "700",
+      marginTop: 10,
+      marginBottom: 10,
+      color: isDark ? "#fff" : "#333",
+    },
+    row: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 12,
+    },
+    label: { fontSize: 14, color: isDark ? "#aaa" : "#777" },
+    value: { fontSize: 16, fontWeight: "600", color: isDark ? "#fff" : "#333" },
+    input: {
+      borderWidth: 1,
+      borderColor: "#ccc",
+      borderRadius: 10,
+      padding: 12,
+      marginTop: 6,
+      color: isDark ? "#fff" : "#333",
+    },
+    editBtn: {
+      backgroundColor: "#FF6A6A",
+      paddingVertical: 6,
+      paddingHorizontal: 14,
+      borderRadius: 8,
+    },
+    editText: { color: "white", fontWeight: "bold" },
+    saveBtn: {
+      backgroundColor: "#FF6A6A",
+      padding: 12,
+      borderRadius: 10,
+      marginTop: 10,
+      alignItems: "center",
+    },
+    saveText: { color: "white", fontWeight: "bold" },
+    logoutBtn: {
+      marginTop: 25,
+      backgroundColor: "#FF6A6A",
+      padding: 15,
+      borderRadius: 12,
+      alignItems: "center",
+    },
+    logoutText: { color: "white", fontSize: 16, fontWeight: "bold" },
+  });
