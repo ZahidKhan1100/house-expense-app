@@ -1,25 +1,36 @@
-import React, { useEffect, useState } from "react";
+import { useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
   Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { apiClient } from "../../src/utils/apiClient";
 import { useTheme } from "../theme/ThemeContext";
 
-export default function AddMate() {
+export default function ManageMates() {
   const { isDark } = useTheme();
   const router = useRouter();
 
   const [mates, setMates] = useState<any[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [houseCode, setHouseCode] = useState("");
-  const [token, setToken] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+
+  const colors = {
+    bg: isDark ? "#0F172A" : "#F8FAFC",
+    card: isDark ? "#1E293B" : "#FFFFFF",
+    text: isDark ? "#F1F5F9" : "#0F172A",
+    sub: isDark ? "#94A3B8" : "#64748B",
+    border: isDark ? "rgba(255,255,255,0.08)" : "#E2E8F0",
+    primary: "#FF6A6A",
+  };
 
   useEffect(() => {
     fetchMates();
@@ -27,69 +38,91 @@ export default function AddMate() {
 
   const fetchMates = async () => {
     try {
-      const data = await apiClient("/mates", "GET", undefined, token);
-
+      const data = await apiClient("/mates", "GET");
       const combined = [
         data.admin ? { ...data.admin, isAdmin: true } : null,
-        ...data.approved.map((m: any) => ({
-          ...m,
-          isAdmin: false,
-        })),
+        ...data.approved.map((m: any) => ({ ...m, isAdmin: false })),
       ].filter(Boolean);
-
-      console.log("data",data);
-      
 
       setMates(combined);
       setIsAdmin(data.is_admin);
-      setHouseCode(data.house_code || "");
+      setHouseCode(data.house.house_code || "");
     } catch (err) {
       console.error(err);
-      Alert.alert("Error", "Failed to load mates");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ---------- Delete mate (admin only) ----------
+  const handleBack = () => {
+    // If we can't go back (like after a refresh), jump to the main Dashboard
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/(tabs)/dashboard");
+    }
+  };
+
   const removeMate = async (mate: any) => {
     if (!isAdmin) return;
 
-    Alert.alert("Remove Mate", `Remove ${mate.name} from house?`, [
-      { text: "Cancel" },
-      {
-        text: "Remove",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await apiClient(`/mates/${mate.id}`, "DELETE", undefined, token);
-
-            setMates((prev) => prev.filter((m) => m.id !== mate.id));
-
-            Alert.alert("Success", "Mate removed");
-          } catch (err) {
-            Alert.alert("Error", "Could not remove mate");
-          }
+    // Web-friendly Alert check
+    const confirmMsg = `Remove ${mate.name} from house?`;
+    if (Platform.OS === "web") {
+      if (!window.confirm(confirmMsg)) return;
+      processRemoval(mate.id);
+    } else {
+      Alert.alert("Remove Mate", confirmMsg, [
+        { text: "Cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => processRemoval(mate.id),
         },
-      },
-    ]);
+      ]);
+    }
   };
 
-  // ---------- Render mate ----------
+  const processRemoval = async (id: string) => {
+    try {
+      await apiClient(`/mates/${id}`, "DELETE");
+      setMates((prev) => prev.filter((m) => m.id !== id));
+      if (Platform.OS !== "web") Alert.alert("Success", "Mate removed");
+    } catch (err) {
+      Alert.alert("Error", "Could not remove mate");
+    }
+  };
+
   const renderMate = ({ item }: any) => (
     <View
       style={[
         styles.mateCard,
-        { backgroundColor: isDark ? "#1F2937" : "#FFEAEA" },
+        { backgroundColor: colors.card, borderColor: colors.border },
       ]}
     >
-      <View>
-        <Text
-          style={[styles.mateText, { color: isDark ? "#F3F4F6" : "#111827" }]}
-        >
-          {item.name}
-          {item.isAdmin && " (Admin)"}
-        </Text>
+      <View
+        style={[
+          styles.avatarCircle,
+          {
+            backgroundColor: item.isAdmin ? "#FFD70020" : colors.primary + "15",
+          },
+        ]}
+      >
+        <FontAwesome5
+          name={item.isAdmin ? "crown" : "user"}
+          size={14}
+          color={item.isAdmin ? "#F59E0B" : colors.primary}
+        />
+      </View>
 
-        <Text style={{ color: isDark ? "#9CA3AF" : "#666" }}>{item.email}</Text>
+      <View style={{ flex: 1, marginLeft: 15 }}>
+        <Text style={[styles.mateText, { color: colors.text }]}>
+          {item.name}{" "}
+          {item.isAdmin && <Text style={styles.adminTag}> (Admin)</Text>}
+        </Text>
+        <Text style={[styles.mateEmail, { color: colors.sub }]}>
+          {item.email}
+        </Text>
       </View>
 
       {isAdmin && !item.isAdmin && (
@@ -97,7 +130,7 @@ export default function AddMate() {
           style={styles.removeBtn}
           onPress={() => removeMate(item)}
         >
-          <Text style={styles.removeText}>Remove</Text>
+          <MaterialIcons name="person-remove" size={20} color="#EF4444" />
         </TouchableOpacity>
       )}
     </View>
@@ -105,132 +138,168 @@ export default function AddMate() {
 
   return (
     <SafeAreaView
-      style={[
-        styles.container,
-        { backgroundColor: isDark ? "#111827" : "#fff" },
-      ]}
+      style={{ flex: 1, backgroundColor: colors.bg }}
+      edges={["top"]}
     >
-      <Text style={[styles.title, { color: isDark ? "#F3F4F6" : "#111827" }]}>
-        Manage Mates
-      </Text>
+      {/* --- PREMIUM HEADER --- */}
+      <View style={styles.newHeader}>
+        <TouchableOpacity onPress={handleBack} style={styles.circularBackBtn}>
+          <FontAwesome5 name="arrow-left" size={16} color="#fff" />
+        </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.backBtn}
-        onPress={() => router.push("/(tabs)/dashboard")}
-      >
-        <Text style={styles.backBtnText}>← Back to Dashboard</Text>
-      </TouchableOpacity>
-
-      {mates.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyText}>No mates in your house yet.</Text>
+        <View style={styles.headerTitleContainer}>
+          <Text style={[styles.screenTitle, { color: colors.text }]}>
+            House Mates
+          </Text>
+          <Text style={[styles.screenSubtitle, { color: colors.sub }]}>
+            {mates.length} Members active
+          </Text>
         </View>
-      ) : (
+
+        <TouchableOpacity
+          style={[
+            styles.headerActionBtn,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={() => router.push("/invite-qr")}
+        >
+          <FontAwesome5 name="qrcode" size={16} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={{ flex: 1, paddingHorizontal: 20 }}>
+        {/* QR Invite Card */}
+        <TouchableOpacity
+          style={[styles.qrBanner, { backgroundColor: colors.primary }]}
+          onPress={() => router.push("/invite-qr")}
+        >
+          <View style={styles.qrContent}>
+            <FontAwesome5 name="user-plus" size={20} color="#fff" />
+            <Text style={styles.qrText}>Invite New Mate via QR</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={24} color="#fff" />
+        </TouchableOpacity>
+
         <FlatList
           data={mates}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderMate}
-          contentContainerStyle={{ paddingBottom: 50 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={{ color: colors.sub }}>No mates found.</Text>
+            </View>
+          }
         />
-      )}
 
-      <View style={styles.codeContainer}>
-        <Text style={[styles.info, { color: isDark ? "#F3F4F6" : "#111827" }]}>
-          Share this house code:
-        </Text>
-
-        <Text style={styles.houseCode}>{houseCode}</Text>
-
-        <Text style={styles.note}>
-          New users can use this code to join your house.
-        </Text>
+        {/* House Code Footer */}
+        <View
+          style={[
+            styles.codeCard,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.codeLabel, { color: colors.sub }]}>
+            HOUSE INVITE CODE
+          </Text>
+          <Text style={styles.houseCode}>{houseCode}</Text>
+          <Text style={styles.note}>
+            Mates can enter this code during signup
+          </Text>
+        </View>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-
-  title: {
-    fontSize: 26,
-    fontWeight: "bold",
-    marginBottom: 15,
-  },
-
-  backBtn: {
-    marginBottom: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    backgroundColor: "#FF6A6A",
-    borderRadius: 12,
-    alignSelf: "flex-start",
-  },
-
-  backBtnText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-
-  mateCard: {
+  // Header Styles
+  newHeader: {
     flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+  },
+  circularBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#FF6A6A",
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 4,
+    shadowColor: "#FF6A6A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  headerTitleContainer: { flex: 1, marginLeft: 15 },
+  screenTitle: { fontSize: 24, fontWeight: "900", letterSpacing: -0.5 },
+  screenSubtitle: { fontSize: 12, fontWeight: "600", marginTop: -2 },
+  headerActionBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+  },
+
+  // QR Banner
+  qrBanner: {
+    flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
     padding: 16,
-    borderRadius: 14,
+    borderRadius: 20,
+    marginBottom: 20,
+    elevation: 4,
+    shadowColor: "#FF6A6A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  qrContent: { flexDirection: "row", alignItems: "center" },
+  qrText: { color: "#fff", fontWeight: "800", marginLeft: 12, fontSize: 16 },
+
+  // Mate Card
+  mateCard: {
+    flexDirection: "row",
+    padding: 12,
+    borderRadius: 16,
     marginBottom: 10,
     alignItems: "center",
-  },
-
-  mateText: {
-    fontSize: 17,
-    fontWeight: "600",
-  },
-
-  removeBtn: {
-    backgroundColor: "#EF4444",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-
-  removeText: {
-    color: "#fff",
-    fontWeight: "600",
-  },
-
-  emptyCard: {
-    padding: 30,
-    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#FF6A6A33",
-    alignItems: "center",
-    marginBottom: 20,
   },
-
-  emptyText: {
-    fontSize: 16,
-    color: "#666",
-  },
-
-  codeContainer: {
-    marginTop: 30,
+  avatarCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
     alignItems: "center",
   },
+  mateText: { fontSize: 16, fontWeight: "700" },
+  adminTag: { color: "#F59E0B", fontSize: 12, fontWeight: "800" },
+  mateEmail: { fontSize: 13, marginTop: 2 },
+  removeBtn: { padding: 8 },
 
-  info: {
-    fontSize: 16,
+  // Footer / House Code
+  codeCard: {
+    padding: 20,
+    borderRadius: 24,
+    alignItems: "center",
+    borderWidth: 1,
+    marginBottom: 60,
+    marginTop: 10,
   },
-
+  codeLabel: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },
   houseCode: {
-    fontSize: 28,
-    fontWeight: "bold",
-    marginVertical: 8,
+    fontSize: 32,
+    fontWeight: "900",
     color: "#FF6A6A",
+    marginVertical: 5,
   },
-
-  note: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-  },
+  note: { fontSize: 12, color: "#666", textAlign: "center" },
+  emptyContainer: { alignItems: "center", marginTop: 40 },
 });

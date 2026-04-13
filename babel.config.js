@@ -5,6 +5,7 @@ module.exports = function (api) {
     plugins: [
       // Required for your curved tab bar animations
       'react-native-reanimated/plugin',
+      
     ],
   };
 };

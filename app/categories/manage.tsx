@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -6,16 +6,24 @@ import {
   TouchableOpacity,
   TextInput,
   Modal,
-  ScrollView,
   StyleSheet,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from "react-native";
-import { FontAwesome5 } from "@expo/vector-icons";
+import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../../src/utils/apiClient";
+import { useKeyboardBottomPadding } from "../../src/hooks/useKeyboardBottomPadding";
+import { useTheme } from "../theme/ThemeContext";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
-const iconOptions = [
+const iconList = [
   "shopping-cart",
   "utensils",
   "bolt",
@@ -23,54 +31,71 @@ const iconOptions = [
   "wifi",
   "home",
   "car",
+  "gift",
+  "apple-alt",
+  "book",
+  "camera",
+  "coffee",
+  "heart",
+  "music",
+  "map",
+  "wallet",
+  "leaf",
+  "phone",
+  "star",
+  "pen",
+  "film",
+  "plug",
+  "bus",
+  "plane",
+  "medkit",
+  "lightbulb",
+  "trash",
+  "tools",
+  "broom",
+  "tshirt",
 ];
 
 export default function ManageCategories() {
+  const router = useRouter();
+  const { isDark } = useTheme();
+  const insets = useSafeAreaInsets();
+  const modalKeyboardPad = useKeyboardBottomPadding(24);
+
+  const colors = {
+    bg: isDark ? "#0F172A" : "#F8FAFC",
+    card: isDark ? "#1E293B" : "#FFFFFF",
+    text: isDark ? "#F1F5F9" : "#0F172A",
+    sub: isDark ? "#94A3B8" : "#64748B",
+    border: isDark ? "rgba(255,255,255,0.08)" : "#E2E8F0",
+    primary: "#FF6A6A",
+    accent: "#6A8DFF",
+  };
+
   const [categories, setCategories] = useState<any[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState<"form" | "icon">("form");
+  const [iconSearch, setIconSearch] = useState("");
   const [newName, setNewName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("shopping-cart");
   const [editingCategory, setEditingCategory] = useState<any>(null);
-  const [confirmModal, setConfirmModal] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
 
-  const router = useRouter();
-
-  // Get token & user info
-  const getAuthData = async () => {
-    const userJson = await AsyncStorage.getItem("user");
-    const token = await AsyncStorage.getItem("token");
-    const user = userJson ? JSON.parse(userJson) : null;
-    return { user, token };
-  };
-
-  // Fetch categories
   const fetchCategories = async () => {
     try {
-      const { token } = await getAuthData();
+      const token = await AsyncStorage.getItem("token");
       if (!token) return;
-
       const cats = await apiClient("/categories", "GET", undefined, token);
       setCategories(cats);
-    } catch (err: any) {
-      console.error("Failed to fetch categories:", err);
+    } catch (e) {
+      console.log(e);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    const init = async () => {
-      const { user } = await getAuthData();
-      if (!user) {
-        router.replace("/login");
-        return;
-      }
-      setCurrentUser(user);
-      fetchCategories();
-    };
-    init();
+    fetchCategories();
   }, []);
 
   const openModal = (category?: any) => {
@@ -83,273 +108,439 @@ export default function ManageCategories() {
       setNewName("");
       setSelectedIcon("shopping-cart");
     }
+    setModalMode("form");
     setModalVisible(true);
   };
 
   const saveCategory = async () => {
     if (!newName.trim()) return;
-
     try {
-      const { token } = await getAuthData();
-      if (!token) return;
-
+      const token = await AsyncStorage.getItem("token");
+      const payload = { name: newName, icon: selectedIcon };
       if (editingCategory) {
-        // Update
         await apiClient(
           `/categories/${editingCategory.id}`,
           "PUT",
-          { name: newName, icon: selectedIcon },
-          token,
+          payload,
+          token!,
         );
       } else {
-        // Create
-        await apiClient(
-          "/categories",
-          "POST",
-          { name: newName, icon: selectedIcon },
-          token,
-        );
+        await apiClient("/categories", "POST", payload, token!);
       }
-
       fetchCategories();
       setModalVisible(false);
-      setConfirmModal(true);
-    } catch (err: any) {
-      console.error("Failed to save category:", err);
+    } catch (e) {
+      console.log(e);
     }
   };
 
-  const confirmDelete = async (category: any) => {
+  const deleteCategory = async (id: number) => {
     try {
-      const { token } = await getAuthData();
-      if (!token) return;
-
-      await apiClient(`/categories/${category.id}`, "DELETE", undefined, token);
+      const token = await AsyncStorage.getItem("token");
+      await apiClient(`/categories/${id}`, "DELETE", undefined, token!);
       fetchCategories();
-    } catch (err: any) {
-      console.error("Failed to delete category:", err);
+    } catch (e) {
+      console.log("Delete error:", e);
     }
   };
-
-  const resetForm = () => {
-    setNewName("");
-    setSelectedIcon("shopping-cart");
-    setEditingCategory(null);
-    setConfirmModal(false);
-  };
-
-  const renderCategory = ({ item }: { item: any }) => (
-    <View style={styles.categoryCard}>
-      <FontAwesome5 name={item.icon} size={24} color="#FF1493" />
-      <Text style={styles.categoryName}>{item.name}</Text>
-      <View style={{ flexDirection: "row" }}>
-        <TouchableOpacity
-          style={styles.editBtn}
-          onPress={() => openModal(item)}
-        >
-          <Text style={styles.actionText}>Edit</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.deleteBtn}
-          onPress={() => confirmDelete(item)}
-        >
-          <Text style={styles.actionText}>Delete</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  if (loading)
-    return (
-      <Text style={{ flex: 1, textAlign: "center", marginTop: 20 }}>
-        Loading...
-      </Text>
-    );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
-      <View style={styles.container}>
-        <Text style={styles.title}>Manage Categories</Text>
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: colors.bg }}
+      edges={["top"]}
+    >
+      {/* Header */}
+      <View style={styles.newHeader}>
         <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => router.push("/(tabs)/dashboard")}
+          onPress={() => router.back()}
+          style={styles.circularBackBtn}
         >
-          <Text style={styles.backBtnText}>← Back to Dashboard</Text>
+          <FontAwesome5 name="arrow-left" size={16} color="#fff" />
         </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={[styles.screenTitle, { color: colors.text }]}>
+            Categories
+          </Text>
+          <Text style={[styles.screenSubtitle, { color: colors.sub }]}>
+            Organize your spending
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={[
+            styles.headerActionBtn,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={() => openModal()}
+        >
+          <FontAwesome5 name="plus" size={14} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
 
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+          style={{ marginTop: 50 }}
+        />
+      ) : (
         <FlatList
           data={categories}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderCategory}
-          ListEmptyComponent={<Text>No categories yet</Text>}
-        />
-
-        <TouchableOpacity style={styles.addBtn} onPress={() => openModal()}>
-          <Text style={styles.addText}>+ Add Category</Text>
-        </TouchableOpacity>
-
-        {/* Add/Edit Modal */}
-        <Modal visible={modalVisible} transparent animationType="slide">
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>
-                {editingCategory ? "Edit Category" : "Add Category"}
+          keyExtractor={(i) => i.id.toString()}
+          renderItem={({ item }) => (
+            <View
+              style={[
+                styles.card,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconCircle,
+                  { backgroundColor: colors.primary + "15" },
+                ]}
+              >
+                <FontAwesome5
+                  name={item.icon}
+                  size={18}
+                  color={colors.primary}
+                />
+              </View>
+              <Text style={[styles.categoryName, { color: colors.text }]}>
+                {item.name}
               </Text>
-              <TextInput
-                placeholder="Category Name"
-                value={newName}
-                onChangeText={setNewName}
-                style={styles.modalInput}
-              />
+              <View style={styles.actionButtons}>
+                <TouchableOpacity
+                  onPress={() => openModal(item)}
+                  style={styles.editBtn}
+                >
+                  <MaterialIcons name="edit" size={20} color={colors.accent} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => deleteCategory(item.id)}>
+                  <MaterialIcons
+                    name="delete-outline"
+                    size={22}
+                    color="#EF4444"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}
+        />
+      )}
 
-              <ScrollView horizontal style={{ marginBottom: 20 }}>
-                {iconOptions.map((icon) => (
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.primary }]}
+        onPress={() => openModal()}
+      >
+        <FontAwesome5 name="plus" size={20} color="#fff" />
+      </TouchableOpacity>
+
+      <Modal visible={modalVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={0}
+        >
+          <View style={styles.overlay}>
+            <View
+              style={[
+                styles.modal,
+                {
+                  backgroundColor: colors.card,
+                  paddingBottom: Math.max(insets.bottom, 12),
+                },
+              ]}
+            >
+              {modalMode === "form" ? (
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: modalKeyboardPad }}
+                >
+                  <View style={styles.modalHeader}>
+                    <Text style={[styles.modalTitle, { color: colors.text }]}>
+                      {editingCategory ? "Edit" : "Add"} Category
+                    </Text>
+                    <TouchableOpacity onPress={() => setModalVisible(false)}>
+                      <MaterialIcons
+                        name="close"
+                        size={24}
+                        color={colors.sub}
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={[styles.label, { color: colors.text }]}>
+                    Category Name
+                  </Text>
+                  <TextInput
+                    placeholder="e.g. Groceries"
+                    placeholderTextColor={colors.sub}
+                    value={newName}
+                    onChangeText={setNewName}
+                    style={[
+                      styles.input,
+                      { color: colors.text, borderColor: colors.border },
+                    ]}
+                  />
+
+                  <Text style={[styles.label, { color: colors.text }]}>
+                    Selected Icon
+                  </Text>
                   <TouchableOpacity
-                    key={icon}
-                    style={{
-                      padding: 10,
-                      marginRight: 10,
-                      borderRadius: 12,
-                      backgroundColor:
-                        selectedIcon === icon ? "#FF1493" : "#eee",
+                    onPress={() => {
+                      setIconSearch("");
+                      setModalMode("icon");
                     }}
-                    onPress={() => setSelectedIcon(icon)}
+                    style={[
+                      styles.iconPickerBtn,
+                      { borderColor: colors.border },
+                    ]}
                   >
-                    <FontAwesome5
-                      name={icon}
+                    <View
+                      style={[
+                        styles.iconCircle,
+                        { backgroundColor: colors.primary + "15" },
+                      ]}
+                    >
+                      <FontAwesome5
+                        name={selectedIcon}
+                        size={20}
+                        color={colors.primary}
+                      />
+                    </View>
+                    <Text
+                      style={{
+                        marginLeft: 12,
+                        color: colors.text,
+                        fontWeight: "600",
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {selectedIcon.replace("-", " ")}
+                    </Text>
+                    <MaterialIcons
+                      name="chevron-right"
                       size={24}
-                      color={selectedIcon === icon ? "#fff" : "#333"}
+                      color={colors.sub}
+                      style={{ marginLeft: "auto" }}
                     />
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
 
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                }}
-              >
-                <TouchableOpacity style={styles.saveBtn} onPress={saveCategory}>
-                  <Text style={styles.actionText}>Save</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.saveBtn, { backgroundColor: "#ccc" }]}
-                  onPress={() => setModalVisible(false)}
-                >
-                  <Text style={styles.actionText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.btn,
+                      { backgroundColor: colors.primary, marginTop: 25 },
+                    ]}
+                    onPress={saveCategory}
+                  >
+                    <Text style={styles.btnText}>Save Category</Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              ) : (
+                <View style={{ maxHeight: 450 }}>
+                  <View style={styles.modalHeader}>
+                    <TouchableOpacity
+                      onPress={() => setModalMode("form")}
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                    >
+                      <MaterialIcons
+                        name="arrow-back"
+                        size={20}
+                        color={colors.primary}
+                      />
+                      <Text
+                        style={{
+                          color: colors.primary,
+                          fontWeight: "700",
+                          marginLeft: 5,
+                        }}
+                      >
+                        Back
+                      </Text>
+                    </TouchableOpacity>
+                    <Text
+                      style={[
+                        styles.modalTitle,
+                        { color: colors.text, fontSize: 16 },
+                      ]}
+                    >
+                      Select Icon
+                    </Text>
+                    <View style={{ width: 40 }} />
+                  </View>
+
+                  <TextInput
+                    placeholder="Search icons..."
+                    placeholderTextColor={colors.sub}
+                    value={iconSearch}
+                    onChangeText={setIconSearch}
+                    style={[
+                      styles.input,
+                      {
+                        color: colors.text,
+                        borderColor: colors.border,
+                        marginBottom: 15,
+                        height: 45,
+                        paddingVertical: 5,
+                      },
+                    ]}
+                  />
+
+                  <FlatList
+                    data={iconList.filter((i) =>
+                      i.toLowerCase().includes(iconSearch.toLowerCase()),
+                    )}
+                    numColumns={3}
+                    keyExtractor={(i) => i}
+                    showsVerticalScrollIndicator={false}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        onPress={() => {
+                          setSelectedIcon(item);
+                          setModalMode("form");
+                        }}
+                        style={[
+                          styles.iconGridItem,
+                          selectedIcon === item && {
+                            backgroundColor: colors.primary + "10",
+                            borderColor: colors.primary,
+                            borderWidth: 1,
+                          },
+                        ]}
+                      >
+                        <FontAwesome5
+                          name={item}
+                          size={22}
+                          color={
+                            selectedIcon === item ? colors.primary : colors.text
+                          }
+                        />
+                        <Text
+                          style={[
+                            styles.iconLabel,
+                            {
+                              color:
+                                selectedIcon === item
+                                  ? colors.primary
+                                  : colors.sub,
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {item}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    contentContainerStyle={{ paddingBottom: modalKeyboardPad }}
+                  />
+                </View>
+              )}
             </View>
           </View>
-        </Modal>
-
-        {/* Confirmation Modal */}
-        <Modal transparent visible={confirmModal} animationType="fade">
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Category Saved!</Text>
-              <Text style={{ marginTop: 10 }}>
-                Do you want to add another category or go back?
-              </Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  marginTop: 20,
-                }}
-              >
-                <TouchableOpacity style={styles.modalBtn} onPress={resetForm}>
-                  <Text style={styles.modalBtnText}>Add Another</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.modalBtn}
-                  onPress={() => router.push("/(tabs)/dashboard")}
-                >
-                  <Text style={styles.modalBtnText}>Dashboard</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: "#F5F5F5" },
-  title: { fontSize: 24, fontWeight: "bold", marginBottom: 20 },
-  categoryCard: {
+  newHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 15,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    marginBottom: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
   },
-  categoryName: { fontSize: 18, marginLeft: 10, flex: 1 },
-  editBtn: {
-    backgroundColor: "#6A8DFF",
-    padding: 8,
-    borderRadius: 8,
-    marginRight: 5,
-  },
-  deleteBtn: { backgroundColor: "#FF6A6A", padding: 8, borderRadius: 8 },
-  actionText: { color: "#fff", fontWeight: "600" },
-  addBtn: {
-    backgroundColor: "#FF1493",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-    marginTop: 10,
-  },
-  addText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
+  circularBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#FF6A6A",
     justifyContent: "center",
     alignItems: "center",
   },
-  modalContent: {
-    width: "85%",
-    backgroundColor: "#fff",
-    padding: 20,
+  headerTitleContainer: { flex: 1, marginLeft: 15 },
+  screenTitle: { fontSize: 24, fontWeight: "900", letterSpacing: -0.5 },
+  screenSubtitle: { fontSize: 12, fontWeight: "600", marginTop: -2 },
+  headerActionBtn: {
+    width: 42,
+    height: 42,
     borderRadius: 12,
-  },
-  modalTitle: { fontSize: 20, fontWeight: "bold", marginBottom: 15 },
-  modalInput: {
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: "#ccc",
+  },
+  card: {
+    padding: 12,
+    borderRadius: 16,
+    marginBottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+  },
+  iconCircle: {
+    width: 40,
+    height: 40,
     borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  categoryName: { flex: 1, marginLeft: 12, fontSize: 16, fontWeight: "700" },
+  actionButtons: { flexDirection: "row", alignItems: "center" },
+  editBtn: { marginRight: 15 },
+  fab: {
+    position: "absolute",
+    bottom: 60,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+  },
+  overlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.4)",
+  },
+  modal: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 25 },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  modalTitle: { fontSize: 20, fontWeight: "800" },
+  label: { fontSize: 14, fontWeight: "700", marginBottom: 8, marginTop: 10 },
+  input: { borderWidth: 1, borderRadius: 14, padding: 14, fontSize: 16 },
+  iconPickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 14,
     padding: 10,
-    marginBottom: 20,
+    marginTop: 5,
   },
-  saveBtn: {
-    backgroundColor: "#6A8DFF",
-    padding: 12,
-    borderRadius: 12,
-    flex: 1,
-    marginHorizontal: 5,
+  btn: { padding: 16, borderRadius: 16, alignItems: "center" },
+  btnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  iconGridItem: {
+    width: "31%",
+    margin: "1%",
     alignItems: "center",
+    paddingVertical: 15,
+    borderRadius: 16,
   },
-  modalBtn: {
-    flex: 1,
-    marginHorizontal: 5,
-    backgroundColor: "#FF1493",
-    padding: 12,
-    borderRadius: 12,
-    alignItems: "center",
+  iconLabel: {
+    fontSize: 10,
+    marginTop: 6,
+    fontWeight: "600",
+    textTransform: "capitalize",
   },
-  modalBtnText: { color: "#fff", fontWeight: "bold" },
-  backBtn: {
-    marginBottom: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    backgroundColor: "#FF6A6A",
-    borderRadius: 12,
-    alignSelf: "flex-start",
-  },
-  backBtnText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
 });
