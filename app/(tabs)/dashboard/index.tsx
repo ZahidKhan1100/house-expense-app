@@ -290,6 +290,21 @@ export default function Dashboard() {
               </View>
               <Text style={styles.compactLabel}>Categories</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.compactAction, { backgroundColor: "#0EA5E9" }]}
+              onPress={() => handleAction("/insights")}
+              activeOpacity={0.88}
+            >
+              <View style={styles.compactIconCircle}>
+                <MaterialCommunityIcons
+                  name="chart-box-outline"
+                  size={18}
+                  color="#0EA5E9"
+                />
+              </View>
+              <Text style={styles.compactLabel}>Insights</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -475,6 +490,7 @@ const createStyles = (isDark: boolean) =>
       flexDirection: "row",
       paddingHorizontal: 20,
       gap: 10,
+      flexWrap: "wrap",
     },
   });
 
@@ -493,6 +509,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,
     shadowRadius: 6,
+    minWidth: (width - 20 * 2 - 10) / 2,
   },
   compactIconCircle: {
     width: 34,

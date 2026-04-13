@@ -151,19 +151,6 @@ export default function TabsLayout() {
         />
 
         <Tabs.Screen
-          name="insights/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="insert-chart" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-            },
-          }}
-        />
-
-        <Tabs.Screen
           name="mates/index"
           options={{
             tabBarIcon: ({ focused }) => (

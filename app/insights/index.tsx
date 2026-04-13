@@ -13,13 +13,15 @@ import {
 } from "react-native";
 import { BarChart, LineChart, PieChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { apiClient } from "../../../src/utils/apiClient";
-import { useTheme } from "../../theme/ThemeContext";
+import { useRouter } from "expo-router";
+import { apiClient } from "../../src/utils/apiClient";
+import { useTheme } from "../theme/ThemeContext";
 
 const screenWidth = Dimensions.get("window").width;
 const COLORS = ["#FF6A6A", "#6366F1", "#10B981", "#F59E0B", "#A29BFE"];
 
 export default function InsightsScreen() {
+  const router = useRouter();
   const { isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [totalExpenses, setTotalExpenses] = useState(0);
@@ -119,6 +121,17 @@ export default function InsightsScreen() {
       >
         {/* Header */}
         <View style={styles.headerRow}>
+          <TouchableOpacity
+            onPress={() =>
+              router.canGoBack() ? router.back() : router.replace("/(tabs)/dashboard")
+            }
+            style={styles.backBtn}
+            activeOpacity={0.85}
+            hitSlop={10}
+          >
+            <MaterialCommunityIcons name="chevron-left" size={26} color="#fff" />
+          </TouchableOpacity>
+
           <View>
             <Text style={[styles.welcomeText, { color: themeColors.subText }]}>
               Analytics
@@ -267,6 +280,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     marginBottom: 20,
+  },
+  backBtn: {
+    width: 45,
+    height: 45,
+    borderRadius: 16,
+    backgroundColor: "#FF6A6A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    shadowColor: "#FF6A6A",
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
   welcomeText: {
     fontSize: 14,

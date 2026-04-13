@@ -18,8 +18,8 @@ export const REALTIME = {
     coral: "#FF6A6A",
   },
   cloudinary: {
-    cloudName: "CLOUDINARY_CLOUD_NAME_HERE",
-    uploadPreset: "CLOUDINARY_UNSIGNED_PRESET_HERE",
+    cloudName: "dh5n8chjf",
+    uploadPreset: "habimate",
   },
 };
 

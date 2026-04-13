@@ -20,6 +20,8 @@ import Animated, { FadeInUp } from "react-native-reanimated";
 import Toast from "react-native-toast-message";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 
 import { useTheme } from "../../theme/ThemeContext";
 import { apiClient } from "../../../src/utils/apiClient";
@@ -57,6 +59,8 @@ function getVoteCount(post: WallPost, optionId: number): number {
 
 export default function Wall() {
   const { isDark } = useTheme();
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -83,8 +87,13 @@ export default function Wall() {
       bg: isDark ? "#0B1220" : "#F8FAFC",
       text: isDark ? "#F1F5F9" : "#0F172A",
       sub: isDark ? "#94A3B8" : "#64748B",
-      border: "rgba(255,255,255,0.40)",
-      glass: "rgba(255,255,255,0.20)",
+      border: isDark ? "rgba(255,255,255,0.40)" : "rgba(255,255,255,0.55)",
+      glass: isDark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.55)",
+      modalBg: isDark ? "#0F172A" : "#FFFFFF",
+      inputBorder: isDark ? "rgba(255,255,255,0.18)" : "rgba(2,6,23,0.10)",
+      inputBg: isDark ? "rgba(255,255,255,0.06)" : "rgba(2,6,23,0.03)",
+      inputText: isDark ? "#FFFFFF" : "#0F172A",
+      inputPlaceholder: isDark ? "rgba(255,255,255,0.6)" : "rgba(15,23,42,0.45)",
     }),
     [isDark],
   );
@@ -96,7 +105,7 @@ export default function Wall() {
       setPosts(res.posts || []);
     } catch (e: any) {
       console.log(e);
-      Alert.alert("Error", e?.message ?? "Could not load House Wall");
+      Alert.alert("House Wall error", e?.message ?? "Could not load House Wall");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -121,7 +130,7 @@ export default function Wall() {
       const s = mine?.status;
       if (s === "home" || s === "out" || s === "away") setStatus(s);
     } catch (e) {
-      // best-effort
+      console.log("Wall meta error", e);
     }
   }, []);
 
@@ -323,6 +332,17 @@ export default function Wall() {
     }
     setCreating(true);
     try {
+      if (
+        REALTIME.cloudinary.cloudName.includes("CLOUDINARY_") ||
+        REALTIME.cloudinary.uploadPreset.includes("CLOUDINARY_")
+      ) {
+        Alert.alert(
+          "Cloudinary not configured",
+          "Set REALTIME.cloudinary.cloudName and REALTIME.cloudinary.uploadPreset in src/realtime/realtimeConfig.ts",
+        );
+        return;
+      }
+
       const imageUrl = await uploadToCloudinary(localImageUri);
       const res = await apiClient("/house-wall/snippets", "POST", {
         caption: caption.trim() || null,
@@ -331,7 +351,7 @@ export default function Wall() {
       if (res?.post) setPosts((prev) => [res.post as WallPost, ...prev]);
       setComposerOpen(false);
     } catch (e: any) {
-      Alert.alert("Couldn’t post", e?.message ?? "Try again");
+      Alert.alert("Couldn’t post snippet", e?.message ?? "Try again");
     } finally {
       setCreating(false);
     }
@@ -353,7 +373,7 @@ export default function Wall() {
       if (res?.post) setPosts((prev) => [res.post as WallPost, ...prev]);
       setComposerOpen(false);
     } catch (e: any) {
-      Alert.alert("Couldn’t post", e?.message ?? "Try again");
+      Alert.alert("Couldn’t post poll", e?.message ?? "Try again");
     } finally {
       setCreating(false);
     }
@@ -382,7 +402,7 @@ export default function Wall() {
         text2: fridgeNote.trim() ? "Saved for everyone" : "Cleared",
       });
     } catch (e: any) {
-      Alert.alert("Error", e?.message ?? "Could not save note");
+      Alert.alert("Save failed", e?.message ?? "Could not save note");
     }
   }, [fridgeNote]);
 
@@ -413,14 +433,18 @@ export default function Wall() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={["top"]}>
       <LinearGradient
         colors={["rgba(255,106,106,0.22)", "transparent"]}
         style={styles.topGlow}
+        pointerEvents="none"
       />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingBottom: Math.max(tabBarHeight + 24, insets.bottom + 120) },
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -434,8 +458,12 @@ export default function Wall() {
           <View style={[styles.pinInner, { backgroundColor: colors.glass, borderColor: colors.border }]}>
             <View style={styles.pinTop}>
               <View style={styles.pinTitleRow}>
-                <MaterialCommunityIcons name="note-text-outline" size={18} color="#fff" />
-                <Text style={styles.pinTitle}>Fridge Note</Text>
+                <MaterialCommunityIcons
+                  name="note-text-outline"
+                  size={18}
+                  color={isDark ? "#fff" : "#0F172A"}
+                />
+                <Text style={[styles.pinTitle, { color: colors.text }]}>Fridge Note</Text>
               </View>
               <TouchableOpacity onPress={saveFridgeNote} activeOpacity={0.9} style={styles.pinSave}>
                 <MaterialCommunityIcons name="content-save" size={16} color="#fff" />
@@ -446,15 +474,26 @@ export default function Wall() {
               value={fridgeNote}
               onChangeText={(t) => setFridgeNote(t.slice(0, 255))}
               placeholder="Landlord visiting at 4 PM…"
-              placeholderTextColor="rgba(255,255,255,0.55)"
-              style={styles.pinInput}
+              placeholderTextColor={colors.inputPlaceholder}
+              style={[
+                styles.pinInput,
+                {
+                  borderColor: colors.inputBorder,
+                  backgroundColor: colors.inputBg,
+                  color: colors.inputText,
+                },
+              ]}
               multiline
             />
 
             <View style={styles.statusRow}>
               <View style={styles.pinTitleRow}>
-                <MaterialCommunityIcons name="home-account" size={18} color="#fff" />
-                <Text style={styles.pinTitle}>Who’s Home</Text>
+                <MaterialCommunityIcons
+                  name="home-account"
+                  size={18}
+                  color={isDark ? "#fff" : "#0F172A"}
+                />
+                <Text style={[styles.pinTitle, { color: colors.text }]}>Who’s Home</Text>
               </View>
               <View style={styles.statusPills}>
                 {(["home", "out", "away"] as const).map((s) => (
@@ -468,7 +507,7 @@ export default function Wall() {
                     ]}
                     activeOpacity={0.9}
                   >
-                    <Text style={styles.statusText}>
+                    <Text style={[styles.statusText, { color: isDark ? "#fff" : "#0F172A" }]}>
                       {s === "home" ? "🏠 Home" : s === "out" ? "🏃‍♂️ Out" : "✈️ Away"}
                     </Text>
                   </TouchableOpacity>
@@ -662,7 +701,15 @@ export default function Wall() {
         onRequestClose={() => setComposerOpen(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { backgroundColor: isDark ? "#0F172A" : "#FFFFFF" }]}>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: colors.modalBg,
+                paddingBottom: Math.max(insets.bottom, 14) + 10,
+              },
+            ]}
+          >
             <View style={styles.modalTop}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Create</Text>
               <TouchableOpacity onPress={() => setComposerOpen(false)} hitSlop={10}>
@@ -678,7 +725,13 @@ export default function Wall() {
                 ]}
                 onPress={() => openComposer("snippet")}
               >
-                <Text style={[styles.modeText, composerMode === "snippet" && styles.modeTextActive]}>
+                <Text
+                  style={[
+                    styles.modeText,
+                    { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
+                    composerMode === "snippet" && styles.modeTextActive,
+                  ]}
+                >
                   Snippet
                 </Text>
               </TouchableOpacity>
@@ -689,7 +742,13 @@ export default function Wall() {
                 ]}
                 onPress={() => openComposer("poll")}
               >
-                <Text style={[styles.modeText, composerMode === "poll" && styles.modeTextActive]}>
+                <Text
+                  style={[
+                    styles.modeText,
+                    { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
+                    composerMode === "poll" && styles.modeTextActive,
+                  ]}
+                >
                   Quick Poll
                 </Text>
               </TouchableOpacity>
@@ -707,16 +766,37 @@ export default function Wall() {
                 )}
 
                 <View style={styles.inputWrap}>
-                  <Text style={styles.inputLabel}>Caption (optional, max 100)</Text>
+                  <Text
+                    style={[
+                      styles.inputLabel,
+                      { color: isDark ? "rgba(255,255,255,0.8)" : "#0F172A" },
+                    ]}
+                  >
+                    Caption (optional, max 100)
+                  </Text>
                   <TextInput
                     value={caption}
                     onChangeText={(t) => setCaption(t.slice(0, 100))}
                     placeholder="Burnt toast chronicles…"
-                    placeholderTextColor="rgba(255,255,255,0.6)"
-                    style={styles.input}
+                    placeholderTextColor={colors.inputPlaceholder}
+                    style={[
+                      styles.input,
+                      {
+                        borderColor: colors.inputBorder,
+                        backgroundColor: colors.inputBg,
+                        color: colors.inputText,
+                      },
+                    ]}
                     maxLength={100}
                   />
-                  <Text style={styles.inputCount}>{caption.length}/100</Text>
+                  <Text
+                    style={[
+                      styles.inputCount,
+                      { color: isDark ? "rgba(255,255,255,0.7)" : "rgba(15,23,42,0.6)" },
+                    ]}
+                  >
+                    {caption.length}/100
+                  </Text>
                 </View>
 
                 <TouchableOpacity
@@ -741,13 +821,27 @@ export default function Wall() {
                   Question + 2–4 options
                 </Text>
                 <View style={styles.inputWrap}>
-                  <Text style={styles.inputLabel}>Question</Text>
+                  <Text
+                    style={[
+                      styles.inputLabel,
+                      { color: isDark ? "rgba(255,255,255,0.8)" : "#0F172A" },
+                    ]}
+                  >
+                    Question
+                  </Text>
                   <TextInput
                     value={pollQuestion}
                     onChangeText={setPollQuestion}
                     placeholder="Takeaway tonight?"
-                    placeholderTextColor="rgba(255,255,255,0.6)"
-                    style={styles.input}
+                    placeholderTextColor={colors.inputPlaceholder}
+                    style={[
+                      styles.input,
+                      {
+                        borderColor: colors.inputBorder,
+                        backgroundColor: colors.inputBg,
+                        color: colors.inputText,
+                      },
+                    ]}
                   />
                 </View>
 
@@ -762,8 +856,16 @@ export default function Wall() {
                           )
                         }
                         placeholder={`Option ${idx + 1}`}
-                        placeholderTextColor="rgba(255,255,255,0.6)"
-                        style={[styles.input, { flex: 1 }]}
+                        placeholderTextColor={colors.inputPlaceholder}
+                        style={[
+                          styles.input,
+                          {
+                            flex: 1,
+                            borderColor: colors.inputBorder,
+                            backgroundColor: colors.inputBg,
+                            color: colors.inputText,
+                          },
+                        ]}
                       />
                       <TouchableOpacity
                         onPress={() =>
@@ -819,7 +921,7 @@ export default function Wall() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -863,7 +965,7 @@ const styles = StyleSheet.create({
   pinInner: { borderWidth: 1, borderRadius: 22, padding: 14 },
   pinTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   pinTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  pinTitle: { color: "#fff", fontWeight: "900" },
+  pinTitle: { fontWeight: "900" },
   pinSave: {
     flexDirection: "row",
     alignItems: "center",
@@ -880,10 +982,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "#fff",
     fontWeight: "800",
     minHeight: 54,
   },
@@ -897,7 +997,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.18)",
     backgroundColor: "rgba(255,255,255,0.10)",
   },
-  statusText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  statusText: { fontWeight: "900", fontSize: 12 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 10 },
   avatar: {
     width: 36,
@@ -998,21 +1098,17 @@ const styles = StyleSheet.create({
   inputWrap: {
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(255,255,255,0.06)",
     padding: 12,
   },
-  inputLabel: { color: "rgba(255,255,255,0.8)", fontWeight: "900", fontSize: 12, marginBottom: 8 },
+  inputLabel: { fontWeight: "900", fontSize: 12, marginBottom: 8 },
   input: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "#fff",
     fontWeight: "800",
   },
-  inputCount: { marginTop: 8, color: "rgba(255,255,255,0.7)", fontWeight: "900", fontSize: 11, textAlign: "right" },
+  inputCount: { marginTop: 8, fontWeight: "900", fontSize: 11, textAlign: "right" },
   optRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   optDel: {
     width: 40,
