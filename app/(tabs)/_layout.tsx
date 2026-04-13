@@ -177,6 +177,19 @@ export default function TabsLayout() {
         />
 
         <Tabs.Screen
+          name="wall/index"
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <TabIcon name="dashboard" focused={focused} isDark={isDark} />
+            ),
+            listeners: {
+              tabPress: () =>
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+            },
+          }}
+        />
+
+        <Tabs.Screen
           name="payment/index"
           options={{
             tabBarIcon: ({ focused }) => (

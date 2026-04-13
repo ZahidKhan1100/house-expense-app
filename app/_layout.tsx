@@ -8,9 +8,14 @@ import * as Linking from "expo-linking";
 
 import { ThemeProvider } from "./theme/ThemeContext";
 import { AuthProvider, AuthContext } from "../src/context/AuthContext";
+import { toastConfig } from "../src/realtime/toastConfig";
+import { useRealtimeNotifications } from "../src/realtime/useRealtimeNotifications";
 
 function AppContent() {
-  const { loading } = useContext(AuthContext);
+  const { loading, token } = useContext(AuthContext);
+
+  // Boots Pusher listeners + Expo push token registration (best-effort)
+  useRealtimeNotifications(token);
 
   if (loading) {
     return (
@@ -60,7 +65,7 @@ export default function RootLayout() {
         <GestureHandlerRootView style={styles.container}>
           <AuthProvider>
             <AppContent />
-            <Toast />
+            <Toast config={toastConfig} />
           </AuthProvider>
         </GestureHandlerRootView>
       </ThemeProvider>
