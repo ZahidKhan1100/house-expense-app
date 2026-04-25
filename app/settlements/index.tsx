@@ -21,8 +21,11 @@ import Animated, { FadeInUp } from "react-native-reanimated";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import { useKarmaBurst } from "../../src/rewards/useKarmaBurst";
+import { useFocusEffect } from "@react-navigation/native";
 
-import { useTheme } from "../theme/ThemeContext";
+import { useSettlementLock } from "../../src/context/SettlementLockContext";
+import { useTheme } from "../../src/theme/ThemeContext";
 import { apiClient } from "../../src/utils/apiClient";
 
 const { width } = Dimensions.get("window");
@@ -72,6 +75,8 @@ export default function Settlements() {
   >({});
   const [settlements, setSettlements] = useState<any[]>([]);
   const [currency, setCurrency] = useState("$");
+  const { burst, KarmaBurst } = useKarmaBurst();
+  const { refreshSettlementLock } = useSettlementLock();
 
   const colors = useMemo(
     () => ({
@@ -155,6 +160,14 @@ export default function Settlements() {
     fetchData(true);
   }, [fetchData]);
 
+  // Refresh when returning from sub-screens (e.g. buy-backs)
+  useFocusEffect(
+    useCallback(() => {
+      void fetchData(false);
+      return () => {};
+    }, [fetchData]),
+  );
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchData(false);
@@ -210,12 +223,25 @@ export default function Settlements() {
         const from = escapeHtml(resolveName(tx, "from"));
         const to = escapeHtml(resolveName(tx, "to"));
         const amt = `${currency}${Number(tx.amount || 0).toFixed(2)}`;
+        const kind =
+          tx.type === "stock_buyback"
+            ? '<span style="color:#0F766E;font-weight:800;">Buy-back</span>'
+            : '<span style="color:#475569;font-weight:700;">Bill split</span>';
+        const detailParts = [tx.title, tx.note].filter(
+          (x: any) => x && String(x).trim(),
+        );
+        const detail =
+          detailParts.length > 0
+            ? escapeHtml(detailParts.join(" — "))
+            : "—";
         return `
           <tr>
             <td>${from}</td>
             <td style="text-align:center;">➔</td>
             <td>${to}</td>
             <td style="text-align:right; font-weight: 800;">${amt}</td>
+            <td style="text-align:center;">${kind}</td>
+            <td style="font-size:12px;color:#475569;">${detail}</td>
             <td style="text-align:center;">${badge}</td>
           </tr>
         `;
@@ -224,12 +250,12 @@ export default function Settlements() {
       const pendingRows =
         pending.length > 0
           ? pending.map((tx) => rowHtml(tx, "⏳ Pending")).join("")
-          : `<tr><td colspan="5" style="text-align:center; padding: 14px;">No remaining transfers</td></tr>`;
+          : `<tr><td colspan="7" style="text-align:center; padding: 14px;">No remaining transfers</td></tr>`;
 
       const paidRows =
         paid.length > 0
           ? paid.map((tx) => rowHtml(tx, "✅ Paid")).join("")
-          : `<tr><td colspan="5" style="text-align:center; padding: 14px;">No paid settlements yet</td></tr>`;
+          : `<tr><td colspan="7" style="text-align:center; padding: 14px;">No paid settlements yet</td></tr>`;
 
       const html = `
         <html>
@@ -266,6 +292,8 @@ export default function Settlements() {
                   <th style="text-align:center;">Action</th>
                   <th>To</th>
                   <th style="text-align:right;">Amount</th>
+                  <th style="text-align:center;">Type</th>
+                  <th>Details</th>
                   <th style="text-align:center;">Status</th>
                 </tr>
               </thead>
@@ -282,6 +310,8 @@ export default function Settlements() {
                   <th style="text-align:center;">Action</th>
                   <th>To</th>
                   <th style="text-align:right;">Amount</th>
+                  <th style="text-align:center;">Type</th>
+                  <th>Details</th>
                   <th style="text-align:center;">Status</th>
                 </tr>
               </thead>
@@ -291,7 +321,7 @@ export default function Settlements() {
             </table>
 
             <div style="margin-top: 50px; text-align: center; font-size: 10px; color: #94A3B8;">
-              Generated on ${new Date().toLocaleDateString()} via HouseExpenses App
+              Generated on ${new Date().toLocaleDateString()} via HabiMate
             </div>
           </body>
         </html>
@@ -339,6 +369,9 @@ export default function Settlements() {
     );
     try {
       await apiClient(`/settlements/${id}/mark-paid`, "POST");
+      void refreshSettlementLock();
+      // Optimistic dopamine: show the reward burst (backend awards based on 12h rule)
+      burst("+50 Karma");
     } catch (e) {
       fetchData(false);
       console.log(e);
@@ -363,6 +396,7 @@ export default function Settlements() {
       style={[styles.safe, { backgroundColor: colors.bg }]}
       edges={["top"]}
     >
+      <KarmaBurst />
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
       <View style={styles.header}>
@@ -510,6 +544,18 @@ export default function Settlements() {
           )}
         </TouchableOpacity>
 
+        <TouchableOpacity
+          style={[
+            styles.generatePlanBtn,
+            { marginTop: 10, backgroundColor: "#2EC4B6" },
+          ]}
+          onPress={() => router.push({ pathname: "/buybacks/new", params: { month } } as any)}
+          activeOpacity={0.85}
+        >
+          <MaterialCommunityIcons name="refresh" size={20} color="#fff" />
+          <Text style={styles.generatePlanBtnText}>Record stock buy-back</Text>
+        </TouchableOpacity>
+
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>
             Who pays whom
@@ -548,6 +594,7 @@ export default function Settlements() {
             const from = resolveName(tx, "from");
             const to = resolveName(tx, "to");
             const isPaid = tx.status === "paid";
+            const isBuyback = tx.type === "stock_buyback";
             return (
               <View
                 key={tx.id}
@@ -655,6 +702,37 @@ export default function Settlements() {
                     </View>
                   </View>
                 </View>
+
+                {isBuyback && (
+                  <View style={{ marginTop: 10 }}>
+                    <View
+                      style={{
+                        alignSelf: "flex-start",
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        borderRadius: 999,
+                        backgroundColor: isDark ? "rgba(46,196,182,0.18)" : "rgba(46,196,182,0.12)",
+                        borderWidth: 1,
+                        borderColor: isDark ? "rgba(46,196,182,0.35)" : "rgba(46,196,182,0.25)",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: "800",
+                          color: "#2EC4B6",
+                        }}
+                      >
+                        Stock buy-back{tx.title ? ` · ${tx.title}` : ""}
+                      </Text>
+                    </View>
+                    {!!tx.note && (
+                      <Text style={{ marginTop: 6, fontSize: 12, color: colors.sub }}>
+                        {String(tx.note)}
+                      </Text>
+                    )}
+                  </View>
+                )}
 
                 <View style={styles.actionRow}>
                   {isPaid ? (

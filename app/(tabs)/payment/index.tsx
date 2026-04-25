@@ -1,5 +1,4 @@
 import { FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -15,8 +14,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { apiClient } from "../../../src/utils/apiClient";
-import { useTheme } from "../../theme/ThemeContext";
+import { useSettlementLock } from "../../../src/context/SettlementLockContext";
+import { ApiClientError, apiClient } from "../../../src/utils/apiClient";
+import { useTheme } from "../../../src/theme/ThemeContext";
+import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
 
 import * as Print from "expo-print";
 import { useRouter } from "expo-router";
@@ -52,6 +53,8 @@ function escapeHtml(input: any) {
 export default function Payment() {
   const router = useRouter();
   const { isDark } = useTheme();
+  const { onScroll, scrollEventThrottle } = useTabBarScrollSync();
+  const { refreshSettlementLock } = useSettlementLock();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,6 +65,8 @@ export default function Payment() {
   const [categoryBreakdown, setCategoryBreakdown] = useState<any>({});
   const [currency, setCurrency] = useState("$");
   const [currentMonth, setCurrentMonth] = useState(getCurrentMonth());
+  /** Sum of stock buy-back settlement amounts for the month (separate from logged bills). */
+  const [buybackMonthTotal, setBuybackMonthTotal] = useState(0);
 
   const colors = {
     bg: isDark ? "#0F172A" : "#F8FAFC",
@@ -76,15 +81,11 @@ export default function Payment() {
     async (showLoader = true) => {
       if (showLoader) setLoading(true);
       try {
-        const token = await AsyncStorage.getItem("token");
-        if (!token) return;
-
         // Fetches data specifically for the selected month
         const data = await apiClient(
           `/payments/${currentMonth}`,
           "GET",
           undefined,
-          token,
         );
 
         const matesWithPaid = (data.mates || []).map((m: any) => ({
@@ -97,18 +98,44 @@ export default function Payment() {
         setTransactions(data.transactions || []);
         setCategoryBreakdown(data.category_breakdown || {});
         setCurrency(data.currency || "$");
+
+        try {
+          const settle = await apiClient(
+            `/settlements?month=${currentMonth}`,
+            "GET",
+            undefined,
+          );
+          const list = Array.isArray(settle?.settlements)
+            ? settle.settlements
+            : [];
+          const sum = list
+            .filter((s: any) => s?.type === "stock_buyback")
+            .reduce(
+              (acc: number, s: any) => acc + Number(s?.amount ?? 0),
+              0,
+            );
+          setBuybackMonthTotal(sum);
+        } catch {
+          setBuybackMonthTotal(0);
+        }
       } catch (err: any) {
+        if (err instanceof ApiClientError && err.status === 401) {
+          router.replace("/(auth)/login");
+          return;
+        }
         console.log("Fetch Error:", err);
         // Handle case where no records exist for the month
         setMates([]);
         setTransactions([]);
         setCategoryBreakdown({});
+        setBuybackMonthTotal(0);
       } finally {
         setLoading(false);
         setRefreshing(false);
+        void refreshSettlementLock();
       }
     },
-    [currentMonth],
+    [currentMonth, refreshSettlementLock],
   );
 
   // Trigger fetch whenever currentMonth changes
@@ -169,6 +196,21 @@ export default function Payment() {
   const generatePDF = async () => {
     setIsPdfGenerating(true);
     try {
+      let buybackRows: any[] = [];
+      try {
+        const res = await apiClient(
+          `/settlements?month=${currentMonth}`,
+          "GET",
+          undefined,
+        );
+        const list = Array.isArray(res?.settlements) ? res.settlements : [];
+        buybackRows = list.filter(
+          (s: any) => s?.type === "stock_buyback" && Number(s?.amount) >= 0.01,
+        );
+      } catch (e) {
+        console.log("settlements fetch for PDF:", e);
+      }
+
       // 1. Group Summary Rows
       const summaryRows = mates
         .map(
@@ -192,12 +234,37 @@ export default function Payment() {
               const items = Array.isArray(data?.items) ? data.items : [];
               const itemRows = items
                 .map(
-                  (it: any) => `
-                    <tr>
-                      <td>${escapeHtml(it?.title ?? "Item")}</td>
-                      <td style="text-align: right;">${currency}${Number(it?.amount ?? 0).toFixed(2)}</td>
-                    </tr>
-                  `,
+                  (it: any) => {
+                    const excluded = it?.excluded_days_by_user ?? {};
+                    const exPairs = Object.entries(excluded)
+                      .map(([userId, days]: any) => {
+                        const d = Number(days ?? 0);
+                        if (!Number.isFinite(d) || d <= 0) return null;
+                        const who =
+                          mates.find((x: any) => String(x.id) === String(userId))
+                            ?.name ?? `User ${userId}`;
+                        return `${who}: ${Math.trunc(d)}d`;
+                      })
+                      .filter(Boolean)
+                      .join(", ");
+
+                    const exLine =
+                      it?.split_method === "days" && exPairs
+                        ? `<div style="margin-top: 4px; color: #94A3B8; font-size: 11px; font-weight: 700;">
+                             Bill days: ${Number(it?.bill_period_days ?? "") || "-"} • Excluded days: ${escapeHtml(exPairs)}
+                           </div>`
+                        : "";
+
+                    return `
+                      <tr>
+                        <td>
+                          ${escapeHtml(it?.title ?? "Item")}
+                          ${exLine}
+                        </td>
+                        <td style="text-align: right;">${currency}${Number(it?.amount ?? 0).toFixed(2)}</td>
+                      </tr>
+                    `;
+                  },
                 )
                 .join("");
               const catTotal = Number(data?.total ?? 0);
@@ -237,8 +304,14 @@ export default function Payment() {
       // 3. Settlement Rows
       const settlementRows = remainingTransfers.length > 0 
         ? remainingTransfers.map(tx => {
-            const fromName = mates.find(m => m.id === tx.from)?.name || "Unknown";
-            const toName = mates.find(m => m.id === tx.to)?.name || "Unknown";
+            const fromName =
+              tx.from_name ??
+              mates.find((m) => m.id === tx.from)?.name ??
+              "Member";
+            const toName =
+              tx.to_name ??
+              mates.find((m) => m.id === tx.to)?.name ??
+              "Member";
             return `
               <tr>
                 <td>${fromName}</td>
@@ -249,6 +322,46 @@ export default function Payment() {
             `;
           }).join("")
         : '<tr><td colspan="4" style="text-align: center; padding: 15px;">All debts are settled!</td></tr>';
+
+      const buybackTableRows =
+        buybackRows.length > 0
+          ? buybackRows
+              .map((tx: any) => {
+                const fromName = escapeHtml(
+                  tx.from_name ??
+                    mates.find((m: any) => m.id === tx.from_user_id)?.name ??
+                    "Unknown",
+                );
+                const toName = escapeHtml(
+                  tx.to_name ??
+                    mates.find((m: any) => m.id === tx.to_user_id)?.name ??
+                    "Unknown",
+                );
+                const title = escapeHtml(tx.title ?? "Stock buy-back");
+                const note = tx.note ? escapeHtml(tx.note) : "";
+                const status =
+                  tx.status === "paid"
+                    ? '<span style="color:#047857;font-weight:800;">Paid</span>'
+                    : '<span style="color:#BE123C;font-weight:800;">Pending</span>';
+                const noteCell = note
+                  ? `<div style="font-size:11px;color:#64748B;margin-top:4px;">${note}</div>`
+                  : "";
+                return `
+              <tr>
+                <td>${fromName}</td>
+                <td style="text-align:center;">➔</td>
+                <td>${toName}</td>
+                <td style="text-align:right;font-weight:bold;color:#2EC4B6;">${currency}${Number(tx.amount).toFixed(2)}</td>
+                <td>
+                  <div style="font-weight:700;color:#334155;">${title}</div>
+                  ${noteCell}
+                </td>
+                <td style="text-align:center;">${status}</td>
+              </tr>
+            `;
+              })
+              .join("")
+          : `<tr><td colspan="6" style="text-align:center;padding:15px;">No stock buy-backs recorded for this month</td></tr>`;
 
       const html = `
         <html>
@@ -289,7 +402,8 @@ export default function Payment() {
             <h2>2. Who paid for which items (by category)</h2>
             ${itemizedSections}
 
-            <h2>3. Remaining transfers (after paid settlements)</h2>
+            <h2>3. Remaining transfers — bill splits (after paid settlements)</h2>
+            <p style="color:#64748B;font-size:13px;margin:0 0 10px 0;">Suggested payments from shared expenses for this month.</p>
             <table>
               <thead>
                 <tr>
@@ -304,8 +418,26 @@ export default function Payment() {
               </tbody>
             </table>
 
+            <h2>4. Stock buy-backs</h2>
+            <p style="color:#64748B;font-size:13px;margin:0 0 10px 0;">Reimbursements for shared purchases (e.g. supplies, move-out items). Split evenly among selected roommates.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>From</th>
+                  <th style="text-align:center;">Action</th>
+                  <th>To</th>
+                  <th style="text-align:right;">Amount</th>
+                  <th>Title / note</th>
+                  <th style="text-align:center;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${buybackTableRows}
+              </tbody>
+            </table>
+
             <div style="margin-top: 50px; text-align: center; font-size: 10px; color: #94A3B8;">
-              Generated on ${new Date().toLocaleDateString()} via HouseExpenses App
+              Generated on ${new Date().toLocaleDateString()} via HabiMate
             </div>
           </body>
         </html>
@@ -397,6 +529,8 @@ export default function Payment() {
       </View>
 
       <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={scrollEventThrottle}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -413,6 +547,43 @@ export default function Payment() {
               {currency}
               {totalSpend.toLocaleString()}
             </Text>
+            {buybackMonthTotal >= 0.01 && (
+              <TouchableOpacity
+                onPress={() =>
+                  router.push({
+                    pathname: "/settlements",
+                    params: { month: currentMonth },
+                  })
+                }
+                style={styles.heroBuybackRow}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={`Buy-backs this month ${currency}${buybackMonthTotal.toFixed(2)}. Opens settlements.`}
+              >
+                <MaterialCommunityIcons
+                  name="cash-refund"
+                  size={18}
+                  color="rgba(255,255,255,0.9)"
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.heroBuybackLabel}>
+                    Buy-backs this month
+                  </Text>
+                  <Text style={styles.heroBuybackHint}>
+                    Reimbursements · tap for details
+                  </Text>
+                </View>
+                <Text style={styles.heroBuybackAmount}>
+                  {currency}
+                  {buybackMonthTotal.toFixed(2)}
+                </Text>
+                <MaterialCommunityIcons
+                  name="chevron-right"
+                  size={22}
+                  color="rgba(255,255,255,0.75)"
+                />
+              </TouchableOpacity>
+            )}
           </View>
           <View style={styles.heroIconBg}>
             <MaterialCommunityIcons
@@ -523,7 +694,9 @@ export default function Payment() {
             >
               <View style={styles.txSide}>
                 <Text style={[styles.txName, { color: colors.text }]}>
-                  {mates.find((m) => m.id === tx.from)?.name}
+                  {tx.from_name ??
+                    mates.find((m) => m.id === tx.from)?.name ??
+                    "Member"}
                 </Text>
                 <Text style={styles.txLabel}>Payer</Text>
               </View>
@@ -548,7 +721,9 @@ export default function Payment() {
                     { color: colors.text, textAlign: "right" },
                   ]}
                 >
-                  {mates.find((m) => m.id === tx.to)?.name}
+                  {tx.to_name ??
+                    mates.find((m) => m.id === tx.to)?.name ??
+                    "Member"}
                 </Text>
                 <Text style={[styles.txLabel, { textAlign: "right" }]}>
                   Receiver
@@ -607,6 +782,32 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   heroAmount: { color: "#fff", fontSize: 32, fontWeight: "900", marginTop: 4 },
+  heroBuybackRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.28)",
+  },
+  heroBuybackLabel: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  heroBuybackHint: {
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  heroBuybackAmount: {
+    color: "#B8FFF6",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: -0.3,
+  },
   heroIconBg: {
     width: 52,
     height: 52,

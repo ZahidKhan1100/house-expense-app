@@ -1,6 +1,8 @@
 import React, { createContext, useEffect, useState, ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { subscribeSessionToken } from "../auth/sessionTokenBridge";
+
 interface AuthContextType {
   token: string | null;
   loading: boolean;
@@ -30,6 +32,10 @@ export const AuthProvider = ({ children }: Props) => {
       setLoading(false);
     };
     loadToken();
+  }, []);
+
+  useEffect(() => {
+    return subscribeSessionToken((t) => setToken(t));
   }, []);
 
   const login = async (newToken: string) => {

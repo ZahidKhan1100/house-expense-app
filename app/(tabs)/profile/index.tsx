@@ -14,6 +14,7 @@ import {
   Dimensions,
   Platform,
   KeyboardAvoidingView,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -24,10 +25,14 @@ import {
   MaterialIcons,
 } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useTheme } from "../../theme/ThemeContext";
-import { apiClient } from "../../../src/utils/apiClient";
+import { useTheme } from "../../../src/theme/ThemeContext";
+import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
+import { ApiClientError, apiClient, getApiErrorMessage } from "../../../src/utils/apiClient";
+import { clearPendingHouseCode } from "../../../src/utils/houseInviteLink";
 import { useKeyboardBottomPadding } from "../../../src/hooks/useKeyboardBottomPadding";
 import * as LocalAuthentication from "expo-local-authentication";
+import { requestWebNotificationPermission, webNotificationsSupported } from "../../../src/realtime/webNotifications";
+import { HABIMATE_PROMISE_SUMMARY, LEGAL_URLS } from "../../../src/config/legal";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -82,6 +87,7 @@ const WORLD_CURRENCIES = [
 export default function Profile() {
   const router = useRouter();
   const { isDark, toggleTheme } = useTheme();
+  const { onScroll, scrollEventThrottle } = useTabBarScrollSync();
 
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState<any>(null);
@@ -91,6 +97,8 @@ export default function Profile() {
   const [showCurrencyModal, setShowCurrencyModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [faceIdEnabled, setFaceIdEnabled] = useState(false);
+  const [webNotifEnabled, setWebNotifEnabled] = useState(false);
+  const [guestWeightStr, setGuestWeightStr] = useState("100");
 
   const mainScrollPad = useKeyboardBottomPadding(100);
   const currencyModalPad = useKeyboardBottomPadding(28);
@@ -106,16 +114,20 @@ export default function Profile() {
 
   const fetchProfile = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      if (!token) return router.replace("/(auth)/login");
-
-      const profile = await apiClient("/profile", "GET", undefined, token);
+      const profile = await apiClient("/profile", "GET");
       setUserData(profile);
       if (profile.house) {
         setHouseName(profile.house.name);
         setCurrency(profile.house.currency || "$");
+        setGuestWeightStr(
+          String(profile.house.guest_day_weight_percent ?? 100),
+        );
       }
     } catch (err: any) {
+      if (err instanceof ApiClientError && err.status === 401) {
+        router.replace("/(auth)/login");
+        return;
+      }
       console.error("Profile Load Error:", err);
     } finally {
       setLoading(false);
@@ -127,6 +139,14 @@ export default function Profile() {
     (async () => {
       const saved = await AsyncStorage.getItem("faceIdEnabled");
       if (saved === "true") setFaceIdEnabled(true);
+    })();
+    (async () => {
+      if (Platform.OS !== "web") return;
+      try {
+        setWebNotifEnabled(webNotificationsSupported() && Notification.permission === "granted");
+      } catch {
+        setWebNotifEnabled(false);
+      }
     })();
   }, []);
 
@@ -161,7 +181,8 @@ export default function Profile() {
 
   const handleLogout = async () => {
     try {
-      await AsyncStorage.multiRemove(["token", "user", "pending_house_code"]);
+      await clearPendingHouseCode();
+      await AsyncStorage.multiRemove(["token", "user"]);
       router.replace("/(auth)/login");
     } catch (error) {
       router.replace("/(auth)/login");
@@ -187,14 +208,56 @@ export default function Profile() {
     );
   }, [searchQuery]);
 
-  const saveUpdate = async (type: "name" | "currency", value: string) => {
+  const saveGuestWeight = async () => {
+    if (!userData?.house?.id) return;
+    if (
+      userData?.has_pending_settlements &&
+      userData?.house
+    ) {
+      Alert.alert(
+        "Settle up first",
+        "Finish pending settlement transfers on the Pay tab before changing house settings.",
+      );
+      return;
+    }
+    const n = parseFloat(String(guestWeightStr).replace(",", "."));
+    if (!Number.isFinite(n) || n < 0 || n > 500) {
+      Alert.alert("Invalid value", "Enter a number between 0 and 500.");
+      return;
+    }
     try {
-      const token = await AsyncStorage.getItem("token");
+      await apiClient(
+        `/houses/${userData.house.id}`,
+        "PUT",
+        { guest_day_weight_percent: n },
+      );
+      setUserData((prev: any) => ({
+        ...prev,
+        house: { ...prev.house, guest_day_weight_percent: n },
+      }));
+      setGuestWeightStr(String(n));
+      Alert.alert("Saved", "Guest billing weight updated for this house.");
+    } catch (err) {
+      Alert.alert("Error", getApiErrorMessage(err, "Could not save"));
+    }
+  };
+
+  const saveUpdate = async (type: "name" | "currency", value: string) => {
+    if (
+      userData?.has_pending_settlements &&
+      (type === "name" || type === "currency")
+    ) {
+      Alert.alert(
+        "Settle up first",
+        "Finish your pending settlement transfers on the Pay tab before changing house settings.",
+      );
+      return;
+    }
+    try {
       await apiClient(
         `/houses/${userData.house.id}`,
         "PUT",
         { [type === "name" ? "name" : "currency"]: value },
-        token || "",
       );
       if (type === "currency") {
         setCurrency(value);
@@ -209,24 +272,27 @@ export default function Profile() {
 
   const handleLeaveHouse = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      await apiClient("/leave-house", "POST", {}, token || "");
+      await apiClient("/leave-house", "POST", {});
+      await clearPendingHouseCode();
       Alert.alert("Success", "You left the house");
       router.replace("/(auth)/login");
     } catch (err) {
-      Alert.alert("Error", "Failed to leave house");
+      Alert.alert("Can't leave", getApiErrorMessage(err, "Failed to leave house"));
     }
   };
 
   const handleDeleteAccount = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      await apiClient("/delete-account", "POST", {}, token || "");
-      await AsyncStorage.multiRemove(["token", "user", "pending_house_code"]);
+      await apiClient("/delete-account", "POST", {});
+      await clearPendingHouseCode();
+      await AsyncStorage.multiRemove(["token", "user"]);
       Alert.alert("Deleted", "Your account has been deleted");
       router.replace("/(auth)/login");
     } catch (err) {
-      Alert.alert("Error", "Failed to delete account");
+      Alert.alert(
+        "Can't delete account",
+        getApiErrorMessage(err, "Failed to delete account"),
+      );
     }
   };
 
@@ -252,10 +318,13 @@ export default function Profile() {
     );
 
   const isAdmin = userData.role === "admin";
+  const settlementLocked = !!userData.has_pending_settlements;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={scrollEventThrottle}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
@@ -283,12 +352,47 @@ export default function Profile() {
                 </View>
               </View>
               <Text style={styles.nameText}>{userData.name}</Text>
+              {!!userData.is_founder && (
+                <LinearGradient
+                  colors={["#FFD700", "#FF6A6A"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.founderChip}
+                >
+                  <FontAwesome5 name="crown" size={10} color="#fff" />
+                  <Text style={styles.founderChipText}>Founder</Text>
+                </LinearGradient>
+              )}
               <Text style={styles.emailText}>{userData.email}</Text>
             </View>
           </SafeAreaView>
         </LinearGradient>
 
         <View style={styles.body}>
+          {settlementLocked && (
+            <View
+              style={{
+                padding: 14,
+                marginBottom: 12,
+                borderRadius: 12,
+                backgroundColor: isDark
+                  ? "rgba(251, 191, 36, 0.12)"
+                  : "#FFFBEB",
+                borderWidth: 1,
+                borderColor: "rgba(245, 158, 11, 0.35)",
+              }}
+            >
+              <Text style={{ color: colors.text, fontWeight: "800", fontSize: 14 }}>
+                Pending settlements
+              </Text>
+              <Text
+                style={{ color: colors.subText, marginTop: 6, fontSize: 13, lineHeight: 18 }}
+              >
+                Use the Pay tab to mark your transfers paid. Other tabs stay limited until
+                you are fully settled.
+              </Text>
+            </View>
+          )}
           {/* GROUP 1: PREFERENCES */}
           <Text style={[styles.sectionTitle, { color: colors.subText }]}>
             Preferences
@@ -299,6 +403,26 @@ export default function Profile() {
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push("/whats-new" as any)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.rowIconLabel}>
+                <View style={[styles.iconBox, { backgroundColor: "#FF6A6A20" }]}>
+                  <MaterialCommunityIcons
+                    name="newspaper-variant-outline"
+                    size={18}
+                    color={colors.accent}
+                  />
+                </View>
+                <Text style={[styles.rowText, { color: colors.text }]}>
+                  What’s new
+                </Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={colors.subText} />
+            </TouchableOpacity>
+
             <View style={styles.row}>
               <View style={styles.rowIconLabel}>
                 <View
@@ -342,6 +466,40 @@ export default function Profile() {
                 trackColor={{ false: "#E2E8F0", true: "#FF6A6A" }}
               />
             </View>
+
+            {Platform.OS === "web" && (
+              <View style={styles.row}>
+                <View style={styles.rowIconLabel}>
+                  <View style={[styles.iconBox, { backgroundColor: "#3B82F620" }]}>
+                    <MaterialCommunityIcons name="bell-outline" size={18} color="#3B82F6" />
+                  </View>
+                  <Text style={[styles.rowText, { color: colors.text }]}>
+                    Web Notifications
+                  </Text>
+                </View>
+                <Switch
+                  value={webNotifEnabled}
+                  onValueChange={async (next) => {
+                    if (!next) {
+                      Alert.alert(
+                        "Browser setting",
+                        "To disable, block notifications for this site in your browser settings.",
+                      );
+                      return;
+                    }
+                    const perm = await requestWebNotificationPermission();
+                    setWebNotifEnabled(perm === "granted");
+                    if (perm !== "granted") {
+                      Alert.alert(
+                        "Permission denied",
+                        "Please allow notifications in the browser prompt/settings.",
+                      );
+                    }
+                  }}
+                  trackColor={{ false: "#E2E8F0", true: "#FF6A6A" }}
+                />
+              </View>
+            )}
           </View>
 
           {/* GROUP 2: HOUSE SETTINGS */}
@@ -385,13 +543,23 @@ export default function Profile() {
                     </View>
                   </View>
                   <TouchableOpacity
-                    onPress={() => setEditingHouse(!editingHouse)}
+                    onPress={() => {
+                      if (settlementLocked) {
+                        Alert.alert(
+                          "Settle up first",
+                          "Finish pending settlement transfers on the Pay tab before editing house settings.",
+                        );
+                        return;
+                      }
+                      setEditingHouse(!editingHouse);
+                    }}
                   >
                     <Text
                       style={[
                         styles.actionLink,
                         {
                           color: editingHouse ? colors.subText : colors.accent,
+                          opacity: settlementLocked ? 0.45 : 1,
                         },
                       ]}
                     >
@@ -430,7 +598,16 @@ export default function Profile() {
 
                 <TouchableOpacity
                   style={styles.row}
-                  onPress={() => setShowCurrencyModal(true)}
+                  onPress={() => {
+                    if (settlementLocked) {
+                      Alert.alert(
+                        "Settle up first",
+                        "Finish pending settlement transfers on the Pay tab before changing currency.",
+                      );
+                      return;
+                    }
+                    setShowCurrencyModal(true);
+                  }}
                 >
                   <View style={styles.rowIconLabel}>
                     <View
@@ -452,6 +629,72 @@ export default function Profile() {
                     />
                   </View>
                 </TouchableOpacity>
+
+                <View style={styles.divider} />
+
+                <View style={{ paddingHorizontal: 15, paddingBottom: 16 }}>
+                  <Text style={[styles.rowText, { color: colors.text }]}>
+                    Guest night billing
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      color: colors.subText,
+                      marginTop: 6,
+                      lineHeight: 16,
+                    }}
+                  >
+                    Each guest night counts as this percent of one full bill day in
+                    day-weighted splits. 100 = one person-day (same as one night at
+                    home). Lower values lighten the impact; higher values charge more
+                    per guest night.
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      marginTop: 12,
+                      gap: 10,
+                    }}
+                  >
+                    <TextInput
+                      style={[
+                        styles.inputField,
+                        {
+                          flex: 1,
+                          color: colors.text,
+                          backgroundColor: isDark ? "#0F172A" : "#F1F5F9",
+                          paddingVertical: 10,
+                        },
+                      ]}
+                      keyboardType="decimal-pad"
+                      value={guestWeightStr}
+                      onChangeText={setGuestWeightStr}
+                      placeholder="100"
+                      placeholderTextColor={colors.subText}
+                    />
+                    <TouchableOpacity
+                      onPress={() => {
+                        if (settlementLocked) {
+                          Alert.alert(
+                            "Settle up first",
+                            "Finish pending settlement transfers on the Pay tab before editing house settings.",
+                          );
+                          return;
+                        }
+                        saveGuestWeight();
+                      }}
+                      style={{
+                        paddingHorizontal: 16,
+                        paddingVertical: 10,
+                        borderRadius: 10,
+                        backgroundColor: colors.accent,
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "800" }}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
             </>
           )}
@@ -474,8 +717,17 @@ export default function Profile() {
                 ]}
               >
                 <TouchableOpacity
-                  style={styles.row}
-                  onPress={confirmLeaveHouse}
+                  style={[styles.row, settlementLocked && { opacity: 0.45 }]}
+                  onPress={() => {
+                    if (settlementLocked) {
+                      Alert.alert(
+                        "Settle up first",
+                        "Mark your pending settlement transfers paid on the Pay tab before leaving the house.",
+                      );
+                      return;
+                    }
+                    confirmLeaveHouse();
+                  }}
                 >
                   <View style={styles.rowIconLabel}>
                     <View
@@ -496,6 +748,72 @@ export default function Profile() {
             </>
           )}
 
+          {/* Privacy & Trust — full legal docs on website */}
+          <Text
+            style={[
+              styles.sectionTitle,
+              { color: colors.subText, marginTop: 25 },
+            ]}
+          >
+            Privacy & Trust
+          </Text>
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <View style={{ paddingHorizontal: 15, paddingTop: 14, paddingBottom: 8 }}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  lineHeight: 18,
+                  color: colors.subText,
+                }}
+              >
+                {HABIMATE_PROMISE_SUMMARY}
+              </Text>
+            </View>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                const ok = await Linking.canOpenURL(LEGAL_URLS.privacy);
+                if (ok) Linking.openURL(LEGAL_URLS.privacy);
+                else Alert.alert("Unable to open link", LEGAL_URLS.privacy);
+              }}
+            >
+              <View style={styles.rowIconLabel}>
+                <View style={[styles.iconBox, { backgroundColor: "#2EC4B620" }]}>
+                  <MaterialCommunityIcons name="shield-lock-outline" size={18} color="#2EC4B6" />
+                </View>
+                <Text style={[styles.rowText, { color: colors.text }]}>
+                  Privacy Policy (website)
+                </Text>
+              </View>
+              <FontAwesome5 name="chevron-right" size={10} color={colors.accent} />
+            </TouchableOpacity>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                const ok = await Linking.canOpenURL(LEGAL_URLS.terms);
+                if (ok) Linking.openURL(LEGAL_URLS.terms);
+                else Alert.alert("Unable to open link", LEGAL_URLS.terms);
+              }}
+            >
+              <View style={styles.rowIconLabel}>
+                <View style={[styles.iconBox, { backgroundColor: "#6366F120" }]}>
+                  <MaterialCommunityIcons name="file-document-outline" size={18} color="#6366F1" />
+                </View>
+                <Text style={[styles.rowText, { color: colors.text }]}>
+                  Terms of Service (website)
+                </Text>
+              </View>
+              <FontAwesome5 name="chevron-right" size={10} color={colors.accent} />
+            </TouchableOpacity>
+          </View>
+
           {/* GROUP: DANGER ZONE */}
           <Text
             style={[
@@ -511,7 +829,19 @@ export default function Profile() {
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
-            <TouchableOpacity style={styles.row} onPress={confirmDeleteAccount}>
+            <TouchableOpacity
+              style={[styles.row, settlementLocked && { opacity: 0.45 }]}
+              onPress={() => {
+                if (settlementLocked) {
+                  Alert.alert(
+                    "Settle up first",
+                    "Mark your pending settlement transfers paid on the Pay tab before deleting your account.",
+                  );
+                  return;
+                }
+                confirmDeleteAccount();
+              }}
+            >
               <View style={styles.rowIconLabel}>
                 <View
                   style={[styles.iconBox, { backgroundColor: "#EF444420" }]}
@@ -653,6 +983,21 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     elevation: 4,
   },
+  founderChip: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    shadowColor: "#FFD700",
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  founderChipText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   nameText: { fontSize: 24, fontWeight: "800", color: "#fff" },
   emailText: {
     fontSize: 14,

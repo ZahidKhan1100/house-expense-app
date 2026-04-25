@@ -21,7 +21,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { FontAwesome5 } from "@expo/vector-icons";
-import { apiClient } from "../../src/utils/apiClient";
+import { apiClient, getApiErrorMessage } from "../../src/utils/apiClient";
 
 const { width } = Dimensions.get("window");
 
@@ -95,7 +95,7 @@ export default function ForgotPassword() {
       // Redirect or show success (You could also use a custom modal here)
       router.back();
     } catch (err: any) {
-      setError(err.message || "Failed to send reset link");
+      setError(getApiErrorMessage(err, "Failed to send reset link"));
     } finally {
       setLoading(false);
     }

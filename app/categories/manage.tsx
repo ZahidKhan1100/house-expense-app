@@ -17,7 +17,7 @@ import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../../src/utils/apiClient";
 import { useKeyboardBottomPadding } from "../../src/hooks/useKeyboardBottomPadding";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "../../src/theme/ThemeContext";
 import {
   SafeAreaView,
   useSafeAreaInsets,

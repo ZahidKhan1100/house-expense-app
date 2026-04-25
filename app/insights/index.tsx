@@ -1,5 +1,4 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
 import {
@@ -15,7 +14,7 @@ import { BarChart, LineChart, PieChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { apiClient } from "../../src/utils/apiClient";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "../../src/theme/ThemeContext";
 
 const screenWidth = Dimensions.get("window").width;
 const COLORS = ["#FF6A6A", "#6366F1", "#10B981", "#F59E0B", "#A29BFE"];
@@ -44,16 +43,17 @@ export default function InsightsScreen() {
 
   const fetchInsights = async () => {
     try {
-      const data = await apiClient("/house/current/insights");
+      // Fetch in parallel to avoid waterfall latency (helps Android feel snappier).
+      const [data, profile] = await Promise.all([
+        apiClient("/house/current/insights"),
+        apiClient("/profile"),
+      ]);
       setMonthlyData(
         data.monthlyTotals.reduce((acc: any, cur: any) => {
           acc[cur.month] = cur.total;
           return acc;
         }, {}),
       );
-      const token = await AsyncStorage.getItem("token");
-
-      const profile = await apiClient("/profile", "GET", undefined, token);
       if (profile.house) {
         setCurrency(profile.house.currency || "$");
       }

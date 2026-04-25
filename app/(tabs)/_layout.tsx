@@ -1,68 +1,53 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Tabs, useRouter } from "expo-router";
-import {
-  View,
-  StyleSheet,
-  Dimensions,
-  Platform,
-  TouchableOpacity,
-} from "react-native";
-import Svg, { Path } from "react-native-svg";
+import { Alert, StyleSheet, useWindowDimensions, View } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import Animated, {
   useAnimatedStyle,
-  withSpring,
   useSharedValue,
+  withSpring,
 } from "react-native-reanimated";
-import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useTheme } from "../theme/ThemeContext";
+import {
+  BottomTabBar,
+  BottomTabBarProps,
+} from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const { width } = Dimensions.get("window");
-const TAB_HEIGHT = 80;
+import { useSettlementLock } from "../../src/context/SettlementLockContext";
+import { useTheme } from "../../src/theme/ThemeContext";
+import {
+  TabBarScrollProvider,
+  useTabBarScrollChromeTranslateY,
+} from "../../src/context/TabBarScrollContext";
 
-const TabBg = ({
-  isDark,
-  bottomInset,
-}: {
-  isDark: boolean;
-  bottomInset: number;
-}) => {
-  const center = width / 2;
-
-  const d = `
-    M0 0 
-    H${center - 70} 
-    C${center - 50} 0, ${center - 50} 40, ${center} 40 
-    C${center + 50} 40, ${center + 50} 0, ${center + 70} 0 
-    H${width} 
-    V${TAB_HEIGHT + bottomInset} 
-    H0 
-    Z
-  `;
-
+/** Solid fill behind the tab bar (Android: avoids SVG/fixed-width clipping vs tab items). */
+function TabBarBackgroundFill({ isDark }: { isDark: boolean }) {
   return (
-    <View style={[styles.svgContainer, { height: TAB_HEIGHT + bottomInset }]}>
-      <Svg width={width} height={TAB_HEIGHT + bottomInset}>
-        <Path fill={isDark ? "#1E1E1E" : "#fff"} d={d} />
-      </Svg>
-    </View>
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        { backgroundColor: isDark ? "#1E1E1E" : "#FFFFFF" },
+      ]}
+    />
   );
-};
+}
 
 function TabIcon({
   name,
   focused,
-  isDark,
+  color,
 }: {
   name: string;
   focused: boolean;
-  isDark: boolean;
+  /** From React Navigation (matches label tint). */
+  color: string;
 }) {
   const scale = useSharedValue(1);
 
-  scale.value = withSpring(focused ? 1.4 : 1);
+  useEffect(() => {
+    scale.value = withSpring(focused ? 1.12 : 1);
+  }, [focused, scale]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -70,172 +55,219 @@ function TabIcon({
 
   return (
     <Animated.View style={animatedStyle}>
-      <MaterialIcons
-        name={name as any}
-        size={28}
-        color={focused ? "#FF6A6A" : isDark ? "#A1A1A1" : "#94A3B8"}
-      />
+      <MaterialIcons name={name as any} size={24} color={color} />
     </Animated.View>
   );
 }
 
-export default function TabsLayout() {
-  const router = useRouter();
-  const { isDark } = useTheme();
-  const insets = useSafeAreaInsets(); // ✅ FIX
-
-  const buttonScale = useSharedValue(1);
-
-  const animatedButton = useAnimatedStyle(() => ({
-    transform: [{ scale: buttonScale.value }],
+function HabiMateTabBar(props: BottomTabBarProps) {
+  const chromeY = useTabBarScrollChromeTranslateY();
+  const chromeAnim = useAnimatedStyle(() => ({
+    transform: [{ translateY: chromeY.value }],
   }));
 
-  const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    buttonScale.value = withSpring(0.9);
+  return (
+    <Animated.View
+      style={[
+        styles.chromeStack,
+        chromeAnim,
+      ]}
+      pointerEvents="box-none"
+    >
+      <BottomTabBar {...props} />
+    </Animated.View>
+  );
+}
 
-    setTimeout(() => (buttonScale.value = withSpring(1.1)), 80);
-    setTimeout(() => (buttonScale.value = withSpring(1)), 160);
+function TabsLayoutBody() {
+  const { isDark } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const router = useRouter();
+  const { settlementLocked } = useSettlementLock();
 
-    router.push("/expenses/addExpense");
-  };
+  const activeTint = "#FF6A6A";
+  const inactiveTint = isDark ? "#9CA3AF" : "#65676B";
 
   return (
-    <>
-      {/* Background Shape */}
-      <TabBg isDark={isDark} bottomInset={insets.bottom} />
-
-      {/* Floating Add Button */}
-      <Animated.View
-        style={[
-          styles.floatingButtonContainer,
-          animatedButton,
-          { bottom: TAB_HEIGHT / 2 - 20 + insets.bottom }, // ✅ FIX
-        ]}
-      >
-        <TouchableOpacity activeOpacity={0.9} onPress={handlePress}>
-          <LinearGradient
-            colors={["#FF6A6A", "#FF8E8E"]}
-            style={styles.floatingButton}
-          >
-            <MaterialIcons name="add" size={34} color="#fff" />
-          </LinearGradient>
-        </TouchableOpacity>
-      </Animated.View>
-
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarShowLabel: false,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              backgroundColor: isDark ? "#1E1E1E" : "#fff",
-              height: 70 + insets.bottom, // ✅ FIX
-              paddingBottom: insets.bottom, // ✅ FIX
+    <Tabs
+      tabBar={(props) => <HabiMateTabBar {...props} />}
+      screenOptions={{
+        headerShown: false,
+        tabBarShowLabel: true,
+        tabBarActiveTintColor: activeTint,
+        tabBarInactiveTintColor: inactiveTint,
+        tabBarLabelStyle: styles.tabBarLabel,
+        tabBarItemStyle: styles.tabBarItem,
+        tabBarBackground: () => <TabBarBackgroundFill isDark={isDark} />,
+        tabBarStyle: [
+          styles.tabBar,
+          {
+            backgroundColor: "transparent",
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: isDark ? "rgba(255,255,255,0.12)" : "#E4E6EB",
+            elevation: 8,
+            shadowOpacity: isDark ? 0 : 0.06,
+            shadowOffset: { width: 0, height: -1 },
+            shadowRadius: 4,
+            width: windowWidth,
+            height: 62 + insets.bottom,
+            paddingBottom: insets.bottom,
+            paddingTop: 4,
+          },
+        ],
+      }}
+    >
+      <Tabs.Screen
+        name="dashboard/index"
+        options={{
+          tabBarLabel: "Home",
+          tabBarIcon: ({ focused, color }) => (
+            <TabIcon name="home" focused={focused} color={color} />
+          ),
+          listeners: {
+            tabPress: (e) => {
+              if (settlementLocked) {
+                e.preventDefault();
+                Alert.alert(
+                  "Settle up first",
+                  "You have pending settlement transfers. Use the Pay tab to mark them paid before using other areas of the app.",
+                  [
+                    {
+                      text: "OK",
+                      onPress: () =>
+                        router.replace("/(tabs)/payment" as any),
+                    },
+                  ],
+                );
+                return;
+              }
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             },
-          ],
+          },
         }}
-      >
-        <Tabs.Screen
-          name="dashboard/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="home" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-            },
-          }}
-        />
+      />
 
-        <Tabs.Screen
-          name="mates/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="group" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+      <Tabs.Screen
+        name="mates/index"
+        options={{
+          tabBarLabel: "Mates",
+          tabBarIcon: ({ focused, color }) => (
+            <TabIcon name="group" focused={focused} color={color} />
+          ),
+          listeners: {
+            tabPress: (e) => {
+              if (settlementLocked) {
+                e.preventDefault();
+                Alert.alert(
+                  "Settle up first",
+                  "You have pending settlement transfers. Use the Pay tab to mark them paid before using other areas of the app.",
+                  [
+                    {
+                      text: "OK",
+                      onPress: () =>
+                        router.replace("/(tabs)/payment" as any),
+                    },
+                  ],
+                );
+                return;
+              }
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             },
-          }}
-        />
+          },
+        }}
+      />
 
-        <Tabs.Screen
-          name="wall/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="dashboard" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+      <Tabs.Screen
+        name="wall/index"
+        options={{
+          tabBarLabel: "Wall",
+          tabBarIcon: ({ focused, color }) => (
+            <TabIcon name="dashboard" focused={focused} color={color} />
+          ),
+          listeners: {
+            tabPress: (e) => {
+              if (settlementLocked) {
+                e.preventDefault();
+                Alert.alert(
+                  "Settle up first",
+                  "You have pending settlement transfers. Use the Pay tab to mark them paid before using other areas of the app.",
+                  [
+                    {
+                      text: "OK",
+                      onPress: () =>
+                        router.replace("/(tabs)/payment" as any),
+                    },
+                  ],
+                );
+                return;
+              }
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             },
-          }}
-        />
+          },
+        }}
+      />
 
-        <Tabs.Screen
-          name="payment/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="payments" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-            },
-          }}
-        />
+      <Tabs.Screen
+        name="payment/index"
+        options={{
+          tabBarLabel: "Pay",
+          tabBarIcon: ({ focused, color }) => (
+            <TabIcon name="payments" focused={focused} color={color} />
+          ),
+          listeners: {
+            tabPress: () =>
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+          },
+        }}
+      />
 
-        <Tabs.Screen
-          name="profile/index"
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name="person" focused={focused} isDark={isDark} />
-            ),
-            listeners: {
-              tabPress: () =>
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-            },
-          }}
-        />
-      </Tabs>
-    </>
+      <Tabs.Screen
+        name="profile/index"
+        options={{
+          tabBarLabel: "Profile",
+          tabBarIcon: ({ focused, color }) => (
+            <TabIcon name="person" focused={focused} color={color} />
+          ),
+          listeners: {
+            tabPress: () =>
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+          },
+        }}
+      />
+    </Tabs>
+  );
+}
+
+export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  const hideOffset = 128 + Math.max(insets.bottom, 0);
+
+  return (
+    <TabBarScrollProvider hideOffset={hideOffset}>
+      <TabsLayoutBody />
+    </TabBarScrollProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    position: "absolute",
-    borderTopWidth: 0,
-    elevation: 8,
-    paddingTop: 10,
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowColor: "#000",
-  },
-  svgContainer: {
+  chromeStack: {
     position: "absolute",
     bottom: 0,
-    width,
+    left: 0,
+    right: 0,
   },
-  floatingButtonContainer: {
+  tabBar: {
     position: "absolute",
-    alignSelf: "center",
   },
-  floatingButton: {
-    width: 65,
-    height: 65,
-    borderRadius: 32.5,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#FF6A6A",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    elevation: 10,
+  tabBarLabel: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    letterSpacing: -0.15,
+    marginTop: 2,
+  },
+  tabBarItem: {
+    flex: 1,
+    paddingVertical: 4,
   },
 });

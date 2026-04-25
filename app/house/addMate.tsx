@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { apiClient } from "../../src/utils/apiClient";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "../../src/theme/ThemeContext";
 
 export default function ManageMates() {
   const { isDark } = useTheme();

@@ -30,6 +30,11 @@ import {
   FontAwesome5,
 } from "@expo/vector-icons";
 import { apiClient } from "@/src/utils/apiClient";
+import {
+  clearPendingHouseCode,
+  extractHouseCodeFromQrPayload,
+  peekPendingHouseCode,
+} from "@/src/utils/houseInviteLink";
 
 const { width, height } = Dimensions.get("window");
 const SCANNER_SIZE = width * 0.75;
@@ -42,6 +47,15 @@ export default function ChooseHouse() {
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [manualCode, setManualCode] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const pending = await peekPendingHouseCode();
+      if (pending) {
+        setManualCode((prev) => (prev.trim() ? prev : pending));
+      }
+    })();
+  }, []);
 
   // Animations
   const scanLineAnim = useRef(new Animated.Value(0)).current;
@@ -80,13 +94,7 @@ export default function ChooseHouse() {
       Alert.alert("Invalid Code", "Please enter a valid house code.");
       return;
     }
-    let finalCode = code;
-    try {
-      const parsed = JSON.parse(code);
-      finalCode = parsed.house_code || parsed.houseCode || parsed.code || code;
-    } catch {
-      finalCode = code;
-    }
+    const finalCode = extractHouseCodeFromQrPayload(code);
     setIsProcessing(true);
     try {
       const token = await AsyncStorage.getItem("token");
@@ -98,6 +106,7 @@ export default function ChooseHouse() {
         token,
       );
       if (data?.house) {
+        await clearPendingHouseCode();
         const userStr = await AsyncStorage.getItem("user");
         const user = userStr ? JSON.parse(userStr) : {};
         user.house_id = data.house.id;
@@ -216,7 +225,7 @@ export default function ChooseHouse() {
             </TouchableOpacity>
             <View>
               <Text style={styles.headerTitle}>HabiMate</Text>
-              <Text style={styles.headerSub}>Find your tribe</Text>
+              <Text style={styles.headerSub}>Join a home or create your own</Text>
             </View>
             <View style={{ width: 45 }} />
           </View>

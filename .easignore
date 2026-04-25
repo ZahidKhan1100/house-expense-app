@@ -1,0 +1,31 @@
+node_modules
+.expo
+.git
+.DS_Store
+**/*.log
+
+# Yarn Berry (huge, not needed on EAS)
+.yarn/cache
+.yarn/unplugged
+.yarn/install-state.gz
+
+# native build outputs
+android/**/build
+ios/**/build
+
+# iOS CocoaPods — reinstalled on EAS; keeps Android uploads small
+ios/Pods
+
+# misc
+coverage
+# dependencies
+node_modules
+.yarn/cache
+.yarn/unplugged
+# local build artifacts
+.expo
+android/build
+ios/build
+# misc
+*.log
+.DS_Store

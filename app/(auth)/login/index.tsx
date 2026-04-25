@@ -1,38 +1,52 @@
-import React, { useState, useEffect, useRef } from "react";
 import {
-  View,
-  StyleSheet,
-  Dimensions,
-  ScrollView,
-  Platform,
-  Animated,
-  Easing,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  StatusBar,
-  Image,
-} from "react-native";
-import { TextInput, Text, ActivityIndicator } from "react-native-paper";
-import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
-import * as Google from "expo-auth-session/providers/google";
-import * as AppleAuthentication from "expo-apple-authentication";
-import * as WebBrowser from "expo-web-browser";
+    FontAwesome5,
+    Ionicons
+} from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Google from "expo-auth-session/providers/google";
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import { useEffect, useRef, useState } from "react";
 import {
-  SafeAreaView,
-  useSafeAreaInsets,
+    Alert,
+    Animated,
+    Dimensions,
+    Easing,
+    Image,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import NetInfo from "@react-native-community/netinfo";
+import { ActivityIndicator, Text, TextInput } from "react-native-paper";
+import {
+    SafeAreaView,
+    useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { useKeyboardBottomPadding } from "../../../src/hooks/useKeyboardBottomPadding";
-import {
-  FontAwesome5,
-  MaterialCommunityIcons,
-  Ionicons,
-} from "@expo/vector-icons";
 
+import {
+    getGoogleIdTokenAuthRequestOptions,
+    shouldUseGoogleAuthProxy,
+} from "../../../src/config/googleAuth";
 import { login, socialLogin } from "../../../src/services/authService";
 import { getGoogleIdTokenFromAuthResponse } from "../../../src/utils/googleAuthSession";
+import { getApiErrorMessage } from "../../../src/utils/apiClient";
+import {
+  APPLE_SIGN_IN_STALL_HELP_MS,
+  isAppleSignInUserCancellation,
+} from "../../../src/utils/appleSignInError";
+import {
+  clearPendingHouseCode,
+  peekPendingHouseCode,
+} from "../../../src/utils/houseInviteLink";
 
 WebBrowser.maybeCompleteAuthSession();
 const { width, height } = Dimensions.get("window");
@@ -47,6 +61,10 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [secureText, setSecureText] = useState(true);
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  const [appleSignInInProgress, setAppleSignInInProgress] = useState(false);
+  const appleStallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appleDialogActiveRef = useRef(false);
 
   // --- BRAND COLORS ---
   const colors = {
@@ -95,24 +113,38 @@ export default function Login() {
     ).start();
   }, []);
 
+  useEffect(() => {
+    (async () => {
+      if (Platform.OS !== "ios") return;
+      try {
+        const ok = await AppleAuthentication.isAvailableAsync();
+        setAppleAvailable(!!ok);
+      } catch {
+        setAppleAvailable(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (appleStallTimerRef.current) {
+        clearTimeout(appleStallTimerRef.current);
+        appleStallTimerRef.current = null;
+      }
+      appleDialogActiveRef.current = false;
+    };
+  }, []);
+
   const floatingY = floatAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, -30],
   });
 
   // --- SOCIAL LOGIN (Google) ---
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    expoClientId:
-      "17026603435-ealfs4spvrgufc7sv7q9baq3hulu2hig.apps.googleusercontent.com",
-    iosClientId:
-      "17026603435-cmpmanevtpudrna3f43pf84umghf3pen.apps.googleusercontent.com",
-    androidClientId:
-      "17026603435-50nrfga3r3rs8dp36ai4m0vu861p6mqe.apps.googleusercontent.com",
-    webClientId:
-      "17026603435-i0ra3c5tq33449tuarsintt88gib9u85.apps.googleusercontent.com",
-    selectAccount: true,
-    useProxy: false,
-  });
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
+    getGoogleIdTokenAuthRequestOptions(),
+  );
+  const googleInFlightRef = useRef(false);
 
   useEffect(() => {
     if (response?.type === "success") {
@@ -136,20 +168,28 @@ export default function Login() {
     setLoading(true);
     setError("");
     try {
-      const data = await socialLogin(provider, token);
+      const pending = await peekPendingHouseCode();
+      const data = await socialLogin(provider, token, {
+        house_code: pending ?? undefined,
+      });
       if (data?.token) {
-        await AsyncStorage.setItem("token", data.token);
-        await AsyncStorage.setItem("user", JSON.stringify(data.user));
+        // Token + user are stored in socialLogin(); bridge updates AuthContext for push/Pusher.
         await AsyncStorage.setItem("active_mode", "house");
+        const hadInviteQr = Boolean(pending);
+        if (data.user?.house_id) {
+          await clearPendingHouseCode();
+        }
 
         if (!data.user?.house_id) {
           router.replace("/choose-house");
           return;
         }
-        router.replace("/(tabs)/dashboard");
+        router.replace(
+          hadInviteQr ? "/(tabs)/wall" : "/(tabs)/dashboard",
+        );
       }
     } catch (err: any) {
-       setError(err.data.error || "Social login failed");
+      setError(getApiErrorMessage(err, "Social login failed"));
     } finally {
       setLoading(false);
     }
@@ -164,26 +204,72 @@ export default function Login() {
     }
     setLoading(true);
     try {
+      const net = await NetInfo.fetch();
+      const likelyOnline =
+        net.isConnected === true && net.isInternetReachable !== false;
+      if (!likelyOnline) {
+        setError("No internet connection. Please connect and try again.");
+        return;
+      }
+      const hadInviteQr = Boolean(await peekPendingHouseCode());
       const data = await login({ email, password });
       if (data?.token) {
-        await AsyncStorage.setItem("token", data.token);
-        await AsyncStorage.setItem("user", JSON.stringify(data.user));
+        // Token + user are stored in login(); bridge updates AuthContext for push/Pusher.
         await AsyncStorage.setItem("active_mode", "house");
+        if (data.user.house_id) {
+          await clearPendingHouseCode();
+        }
 
         if (!data.user.house_id) {
           router.replace("/choose-house");
           return;
         }
-        router.replace("/(tabs)/dashboard");
+        router.replace(
+          hadInviteQr ? "/(tabs)/wall" : "/(tabs)/dashboard",
+        );
       }
     } catch (err: any) {
-      setError(err.message || "Login failed");
+      setError(getApiErrorMessage(err, "Login failed"));
     } finally {
       setLoading(false);
     }
   };
 
+  const clearAppleStallTimer = () => {
+    if (appleStallTimerRef.current) {
+      clearTimeout(appleStallTimerRef.current);
+      appleStallTimerRef.current = null;
+    }
+  };
+
   const handleAppleLogin = async () => {
+    if (appleSignInInProgress) return;
+    if (!appleAvailable) {
+      setError(
+        "Apple Sign‑In isn’t available on this device/simulator. Try a real device or sign into iCloud on the simulator.",
+      );
+      return;
+    }
+    setError("");
+    const net = await NetInfo.fetch();
+    const likelyOnline =
+      net.isConnected === true && net.isInternetReachable !== false;
+    if (!likelyOnline) {
+      setError("No internet connection. Please connect and try again.");
+      return;
+    }
+    setAppleSignInInProgress(true);
+    appleDialogActiveRef.current = true;
+    clearAppleStallTimer();
+    // System Apple Account password sheet is iOS — if it never finishes, the JS promise never resolves.
+    appleStallTimerRef.current = setTimeout(() => {
+      if (!appleDialogActiveRef.current) return;
+      Alert.alert(
+        "Stuck on Apple’s sign-in?",
+        "This password screen is from your iPhone, not HabiMate. Try: use mobile data or another Wi‑Fi, turn off VPN, restart the device, or go to Settings → your name and check Apple ID. You can also tap Back and sign in with email instead.",
+        [{ text: "OK" }],
+      );
+    }, APPLE_SIGN_IN_STALL_HELP_MS);
     try {
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
@@ -192,14 +278,18 @@ export default function Login() {
         ],
       });
       if (credential.identityToken) {
-        handleOAuthLogin("apple", credential.identityToken);
+        await handleOAuthLogin("apple", credential.identityToken);
       } else {
         setError("Apple did not return a token. Try again.");
       }
     } catch (err: any) {
-      if (err.code !== "ERR_CANCELED") {
-        setError(err.message || "Apple sign-in failed");
+      if (!isAppleSignInUserCancellation(err)) {
+        setError(getApiErrorMessage(err, "Apple sign-in failed"));
       }
+    } finally {
+      appleDialogActiveRef.current = false;
+      clearAppleStallTimer();
+      setAppleSignInInProgress(false);
     }
   };
 
@@ -355,7 +445,20 @@ export default function Login() {
                 <View style={styles.socialGrid}>
                   <TouchableOpacity
                     style={styles.socialBtn}
-                    onPress={() => request && promptAsync()}
+                    onPress={() =>
+                      request &&
+                      !googleInFlightRef.current &&
+                      (() => {
+                        googleInFlightRef.current = true;
+                        Promise.resolve(
+                          promptAsync({ useProxy: shouldUseGoogleAuthProxy() } as any),
+                        )
+                          .catch(() => {})
+                          .finally(() => {
+                            googleInFlightRef.current = false;
+                          });
+                      })()
+                    }
                   >
                     <FontAwesome5 name="google" size={20} color="#DB4437" />
                   </TouchableOpacity>
@@ -363,8 +466,13 @@ export default function Login() {
                     <TouchableOpacity
                       style={styles.socialBtn}
                       onPress={handleAppleLogin}
+                      disabled={loading || !appleAvailable || appleSignInInProgress}
                     >
-                      <FontAwesome5 name="apple" size={22} color="#000" />
+                      {appleSignInInProgress ? (
+                        <ActivityIndicator size="small" color="#000" />
+                      ) : (
+                        <FontAwesome5 name="apple" size={22} color="#000" />
+                      )}
                     </TouchableOpacity>
                   )}
                   <TouchableOpacity

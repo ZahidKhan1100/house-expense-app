@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "260136725302",
+    "project_id": "habimate-bc69b",
+    "storage_bucket": "habimate-bc69b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:260136725302:android:ad698fbb6530402a9fe197",
+        "android_client_info": {
+          "package_name": "com.ihabimate.habimate"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA4uFB-E4aiYFGrkfSocp5ur-qzhaKdDNk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "260136725302-b97apatea1e0r043kk2k9ijra4n9nmq8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.ihabimate.habimate"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
