@@ -92,7 +92,6 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-sharing",
       "expo-apple-authentication",
       "@react-native-community/datetimepicker",
       "./plugins/withAndroidCleartextTraffic.js"
