@@ -12,7 +12,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import QRCode from "react-native-qrcode-svg";
 import { apiClient } from "../src/utils/apiClient";
-import { useTheme } from "./theme/ThemeContext";
+import { buildHouseInviteQrValue } from "../src/utils/houseInviteLink";
+import { useTheme } from "../src/theme/ThemeContext";
 import { useRouter } from "expo-router";
 import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import * as MediaLibrary from "expo-media-library";
@@ -110,7 +111,7 @@ export default function InviteQR() {
         const path = RNFS.CachesDirectoryPath + "/house_qr.png";
         await RNFS.writeFile(path, data, "base64");
         await Share.share({
-          message: `Join my house on the app! Use code: ${code}`,
+          message: `Join my house on HabiMate!\n${buildHouseInviteQrValue(code)}`,
           url: "file://" + path,
         });
       } catch (err) {
@@ -151,7 +152,8 @@ export default function InviteQR() {
               Scan QR Code
             </Text>
             <Text style={[styles.description, { color: colors.sub }]}>
-              Mates can scan this to join instantly
+              The QR opens a link in the browser (works without the app). After you install
+              HabiMate, use the same code to join — or scan again from inside the app.
             </Text>
           </View>
 
@@ -160,7 +162,7 @@ export default function InviteQR() {
               <ActivityIndicator size="large" color={colors.primary} />
             ) : (
               <QRCode
-                value={JSON.stringify({ house_code: code })}
+                value={code ? buildHouseInviteQrValue(code) : ""}
                 size={220}
                 backgroundColor={colors.card}
                 color={colors.text}

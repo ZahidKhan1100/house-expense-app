@@ -1,13 +1,22 @@
 {
   "expo": {
-    "name": "Habimate",
-    "slug": "houseexpenses-new",
+    "name": "HabiMate",
+    "owner": "ihabimate",
+    "slug": "habimate",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "enabled": true,
+      "url": "https://u.expo.dev/787a84a2-b8f7-4888-9c5b-43cbcc2d638a",
+      "checkAutomatically": "ON_LOAD"
+    },
+    "jsEngine": "hermes",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "habimate",
+    "scheme": "com.ihabimate.habimate",
     "userInterfaceStyle": "automatic",
-
     "splash": {
       "image": "./assets/images/icon.png",
       "resizeMode": "contain",
@@ -16,16 +25,39 @@
     "ios": {
       "supportsTablet": true,
       "userInterfaceStyle": "automatic",
-      "bundleIdentifier": "com.izahidkhan.houseexpenses-new",
+      "bundleIdentifier": "com.ihabimate.habimate",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Habimate uses your camera to scan house invite QR codes.",
+        "NSPhotoLibraryUsageDescription": "Habimate lets you pick an image to scan a QR code.",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "Habimate",
+            "CFBundleURLSchemes": ["com.ihabimate.habimate"]
+          },
+          {
+            "CFBundleURLName": "Google Sign-In",
+            "CFBundleURLSchemes": [
+              "com.googleusercontent.apps.260136725302-b97apatea1e0r043kk2k9ijra4n9nmq8"
+            ]
+          }
+        ]
       }
     },
     "android": {
-      "package": "com.izahidkhan.houseexpensesnew",
+      "package": "com.ihabimate.habimate",
+      "googleServicesFile": "./google-services.json",
       "userInterfaceStyle": "light",
       "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "NOTIFICATIONS",
+        "POST_NOTIFICATIONS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#FF6A6A",
         "foregroundImage": "./assets/images/icon.png"
@@ -38,20 +70,47 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#FF6A6A"
+        }
+      ],
+      "expo-camera",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#FF6A6A"
+        }
+      ],
       "expo-router",
+      "expo-updates",
+      "@sentry/react-native/expo",
+      "expo-sqlite",
       "expo-secure-store",
       "expo-web-browser",
       "expo-sharing",
       "expo-apple-authentication",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "./plugins/withAndroidCleartextTraffic.js"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
+      "houseInviteWebBase": "https://habimate.com",
       "router": {},
       "eas": {
-        "projectId": "dc409fc6-8287-4979-afc7-02cbc4c142a3"
+        "projectId": "787a84a2-b8f7-4888-9c5b-43cbcc2d638a"
+      },
+      "googleAuth": {
+        "expoClientId": "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
+        "iosClientId": "260136725302-b97apatea1e0r043kk2k9ijra4n9nmq8.apps.googleusercontent.com",
+        "androidClientId": "260136725302-35311tt858bni9oan60kpgnsqic20ele.apps.googleusercontent.com",
+        "webClientId": "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com"
       }
     }
   }

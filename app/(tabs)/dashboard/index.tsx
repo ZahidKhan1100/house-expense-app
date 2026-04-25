@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
+  Platform,
 } from "react-native";
 import {
   MaterialIcons,
@@ -19,9 +20,11 @@ import Animated, { FadeInUp, FadeInRight } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import Toast from "react-native-toast-message";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { useTheme } from "../../theme/ThemeContext";
+import { useSettlementLock } from "../../../src/context/SettlementLockContext";
+import { useTheme } from "../../../src/theme/ThemeContext";
+import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
+import { saveExpenseFormCache } from "../../../src/offline/expenseFormCache";
 import { apiClient } from "../../../src/utils/apiClient";
 
 const { width } = Dimensions.get("window");
@@ -34,6 +37,22 @@ type LatestBill = {
   category_name?: string | null;
   timestamp?: string | null;
 };
+
+type SplitBalance = {
+  month: string;
+  net: number;
+};
+
+function formatMonthShort(ym: string): string {
+  try {
+    return new Date(ym + "-02").toLocaleString("default", {
+      month: "long",
+      year: "numeric",
+    });
+  } catch {
+    return ym;
+  }
+}
 
 function formatBillTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -52,27 +71,47 @@ function formatBillTime(iso: string | null | undefined): string {
 export default function Dashboard() {
   const router = useRouter();
   const { isDark } = useTheme();
+  const { onScroll, scrollEventThrottle } = useTabBarScrollSync();
+  const { settlementLocked } = useSettlementLock();
 
   const [loading, setLoading] = useState(true);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [totalSpent, setTotalSpent] = useState(0);
   const [currency, setCurrency] = useState("$");
   const [latestBill, setLatestBill] = useState<LatestBill | null>(null);
+  const [houseName, setHouseName] = useState<string>("My Home");
+  const [splitBalance, setSplitBalance] = useState<SplitBalance | null>(null);
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      if (!token) {
-        router.replace("/login");
-        return;
-      }
+      const data: any = await apiClient("/dashboard", "GET");
 
-      const data: any = await apiClient("/dashboard", "GET", undefined, token);
-
+      setHouseName(data?.house?.name || "My Home");
       setCurrency(data.currency || "$");
       setTotalSpent(data.total_spent || 0);
       setExpenses(data.category_expenses || []);
       setLatestBill(data.latest_bill ?? null);
+      setSplitBalance(data.split_balance ?? null);
+
+      const houseId = data?.user?.house_id ?? data?.house?.id ?? null;
+      try {
+        await saveExpenseFormCache({
+          mates: data.mates || [],
+          categories: (data.category_expenses || []).map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            icon: c.icon,
+          })),
+          currency: data.currency || "$",
+          guestDayWeightPercent: (() => {
+            const g = Number(data.house?.guest_day_weight_percent);
+            return Number.isFinite(g) && g >= 0 ? g : 100;
+          })(),
+          houseId,
+        });
+      } catch {
+        /* cache is best-effort */
+      }
     } catch (err: any) {
       console.error("Dashboard API error:", err.message);
       Toast.show({ type: "error", text1: "Sync Error", text2: err.message });
@@ -86,6 +125,12 @@ export default function Dashboard() {
       fetchDashboard();
     }, [fetchDashboard]),
   );
+
+  useEffect(() => {
+    if (settlementLocked) {
+      router.replace("/(tabs)/payment" as any);
+    }
+  }, [settlementLocked, router]);
 
   const handleAction = (route: string) => {
     router.push(route as any);
@@ -107,10 +152,24 @@ export default function Dashboard() {
   const categoryRows = expenses.filter((e) => Number(e.total) > 0.005);
   const maxExpense = Math.max(...categoryRows.map((e) => e.total), 0);
 
+  const net = splitBalance ? Number(splitBalance.net) : 0;
+  const hasNet =
+    splitBalance != null && (net > 0.005 || net < -0.005);
+  const balanceLabel = !splitBalance
+    ? null
+    : hasNet
+      ? net > 0
+        ? "You're owed"
+        : "You owe"
+      : "Balanced";
+  const balanceAmount = hasNet ? Math.abs(net) : null;
+
   return (
     <SafeAreaView style={stylesDynamic.container}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
       <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={scrollEventThrottle}
         contentContainerStyle={{ paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
       >
@@ -122,7 +181,9 @@ export default function Dashboard() {
             style={stylesDynamic.homeCard}
           >
             <View style={stylesDynamic.cardHeader}>
-              <Text style={stylesDynamic.homeTitle}>My Home</Text>
+              <Text style={stylesDynamic.homeTitle} numberOfLines={1}>
+                {houseName}
+              </Text>
               <View style={stylesDynamic.modeBadge}>
                 <View style={stylesDynamic.onlineDot} />
                 <Text style={stylesDynamic.modeText}>House Active</Text>
@@ -139,6 +200,46 @@ export default function Dashboard() {
             </Text>
           </LinearGradient>
         </Animated.View>
+
+        {splitBalance != null && (
+          <TouchableOpacity
+            style={stylesDynamic.splitBalanceCard}
+            onPress={() => handleAction("/(tabs)/payment")}
+            activeOpacity={0.88}
+          >
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={stylesDynamic.splitBalanceEyebrow}>
+                This month · {formatMonthShort(splitBalance.month)}
+              </Text>
+              {hasNet && balanceAmount != null ? (
+                <Text style={stylesDynamic.splitBalanceLine}>
+                  <Text style={stylesDynamic.splitBalanceEmphasis}>
+                    {balanceLabel}{" "}
+                  </Text>
+                  <Text style={stylesDynamic.splitBalanceAmount}>
+                    {currency}
+                    {balanceAmount.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </Text>
+                </Text>
+              ) : (
+                <Text style={stylesDynamic.splitBalanceEven}>
+                  {balanceLabel} for shared bills
+                </Text>
+              )}
+              <Text style={stylesDynamic.splitBalanceHint}>
+                After splits & recorded payments · tap for settlements
+              </Text>
+            </View>
+            <MaterialIcons
+              name="chevron-right"
+              size={22}
+              color={isDark ? "#64748B" : "#94A3B8"}
+            />
+          </TouchableOpacity>
+        )}
 
         {/* Latest expense */}
         <View style={stylesDynamic.sectionTight}>
@@ -212,7 +313,8 @@ export default function Dashboard() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingLeft: 20, paddingRight: 10 }}
+              style={styles.breakdownScroll}
+              contentContainerStyle={styles.breakdownScrollContent}
             >
               {categoryRows.map((expense, index) => (
                 <Animated.View
@@ -292,6 +394,17 @@ export default function Dashboard() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              style={[styles.compactAction, { backgroundColor: "#14B8A6" }]}
+              onPress={() => handleAction("/whos-home")}
+              activeOpacity={0.88}
+            >
+              <View style={styles.compactIconCircle}>
+                <FontAwesome5 name="plane-departure" size={15} color="#14B8A6" />
+              </View>
+              <Text style={styles.compactLabel}>Who's Home</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={[styles.compactAction, { backgroundColor: "#0EA5E9" }]}
               onPress={() => handleAction("/insights")}
               activeOpacity={0.88}
@@ -304,6 +417,43 @@ export default function Dashboard() {
                 />
               </View>
               <Text style={styles.compactLabel}>Insights</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.compactAction, { backgroundColor: "#78716C" }]}
+              onPress={() => handleAction("/expenses/audit")}
+              activeOpacity={0.88}
+            >
+              <View style={styles.compactIconCircle}>
+                <MaterialIcons name="history" size={18} color="#78716C" />
+              </View>
+              <Text style={styles.compactLabel}>Expense log</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.compactAction, { backgroundColor: "#FF6A6A" }]}
+              onPress={() => handleAction("/house-legends")}
+              activeOpacity={0.88}
+            >
+              <View style={styles.compactIconCircle}>
+                <MaterialCommunityIcons
+                  name="trophy-outline"
+                  size={18}
+                  color="#FF6A6A"
+                />
+              </View>
+              <Text style={styles.compactLabel}>House Legends</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.compactAction, { backgroundColor: "#A855F7" }]}
+              onPress={() => handleAction("/house-wrapped")}
+              activeOpacity={0.88}
+            >
+              <View style={styles.compactIconCircle}>
+                <MaterialCommunityIcons name="gift-outline" size={18} color="#A855F7" />
+              </View>
+              <Text style={styles.compactLabel}>House Wrapped</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -366,6 +516,52 @@ const createStyles = (isDark: boolean) =>
       fontWeight: "600",
       fontSize: 12,
       marginTop: 4,
+    },
+
+    splitBalanceCard: {
+      marginHorizontal: 20,
+      marginTop: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      borderRadius: 18,
+      backgroundColor: isDark ? "#1E293B" : "#FFFFFF",
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(255,255,255,0.06)" : "#E2E8F0",
+      gap: 8,
+    },
+    splitBalanceEyebrow: {
+      fontSize: 11,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      color: isDark ? "#94A3B8" : "#64748B",
+      marginBottom: 4,
+    },
+    splitBalanceLine: {
+      fontSize: 16,
+      fontWeight: "700",
+      color: isDark ? "#F1F5F9" : "#0F172A",
+    },
+    splitBalanceEmphasis: {
+      fontWeight: "800",
+      color: isDark ? "#E2E8F0" : "#334155",
+    },
+    splitBalanceAmount: {
+      fontWeight: "900",
+      color: "#FF6A6A",
+    },
+    splitBalanceEven: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: isDark ? "#E2E8F0" : "#334155",
+    },
+    splitBalanceHint: {
+      marginTop: 4,
+      fontSize: 11,
+      fontWeight: "600",
+      color: isDark ? "#64748B" : "#94A3B8",
     },
 
     section: { marginTop: 22 },
@@ -450,7 +646,20 @@ const createStyles = (isDark: boolean) =>
       marginRight: 12,
       borderWidth: 1,
       borderColor: isDark ? "rgba(255,255,255,0.05)" : "#F1F5F9",
-      elevation: 2,
+      // Android: horizontal ScrollView clips elevation shadow unless content has vertical padding.
+      ...Platform.select({
+        android: {
+          elevation: 6,
+        },
+        ios: {
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: isDark ? 0.35 : 0.1,
+          shadowRadius: 10,
+          elevation: 4,
+        },
+        default: { elevation: 4 },
+      }),
     },
     iconCircle: {
       width: 40,
@@ -495,6 +704,18 @@ const createStyles = (isDark: boolean) =>
   });
 
 const styles = StyleSheet.create({
+  /** Lets category card shadows (esp. bottom) show on Android inside horizontal ScrollView. */
+  breakdownScroll: {
+    overflow: "visible",
+    marginBottom: Platform.OS === "android" ? 4 : 0,
+  },
+  breakdownScrollContent: {
+    paddingLeft: 20,
+    paddingRight: 10,
+    paddingTop: 6,
+    paddingBottom: Platform.OS === "android" ? 14 : 8,
+    alignItems: "flex-start",
+  },
   compactAction: {
     flex: 1,
     minHeight: 78,

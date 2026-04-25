@@ -92,7 +92,7 @@ export default function Index() {
 
       // ❌ Not logged in
       if (!token || !user) {
-        return router.replace("/login");
+        return router.replace("/(auth)/login");
       }
 
       // 🔐 Face ID check
@@ -114,7 +114,7 @@ export default function Index() {
                     "user",
                     "faceIdEnabled",
                   ]);
-                  router.replace("/login");
+                  router.replace("/(auth)/login");
                 },
               },
             ],
@@ -130,7 +130,7 @@ export default function Index() {
       }
     } catch (err) {
       console.error("Boot error:", err);
-      router.replace("/login");
+      router.replace("/(auth)/login");
     } finally {
       setChecking(false);
     }

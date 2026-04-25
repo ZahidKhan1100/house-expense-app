@@ -15,7 +15,10 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  extractHouseCodeFromQrPayload,
+  setPendingHouseCode,
+} from "../src/utils/houseInviteLink";
 import { WebView } from "react-native-webview";
 import jsQR from "jsqr";
 import { BlurView } from "expo-blur";
@@ -58,20 +61,9 @@ export default function ScanQR() {
     outputRange: [0, innerDimension - 2],
   });
 
-  const saveAndNavigate = async (code: any) => {
-    let finalCode = code;
-
-    try {
-      const parsed = JSON.parse(code);
-
-      // ✅ handle both formats
-      finalCode = parsed.house_code || parsed.houseCode || parsed.code || code;
-    } catch {
-      // not JSON, use raw string
-      finalCode = code;
-    }
-
-    await AsyncStorage.setItem("pending_house_code", finalCode);
+  const saveAndNavigate = async (code: string) => {
+    const finalCode = extractHouseCodeFromQrPayload(code);
+    await setPendingHouseCode(finalCode);
 
     Alert.alert("🔑 House Code Linked", "Ready to join the tribe?", [
       {
@@ -201,7 +193,7 @@ export default function ScanQR() {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.roundBtn}
-            onPress={() => router.replace("/login")}
+            onPress={() => router.replace("/(auth)/login")}
           >
             <Ionicons name="chevron-back" size={24} color="#FFF" />
           </TouchableOpacity>
