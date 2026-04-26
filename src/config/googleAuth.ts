@@ -10,6 +10,7 @@ import { Platform } from "react-native";
  * replaces Android + iOS + Web. "expoClientId" is the Web/Expo-style client used when
  * signing in through Expo Go (auth proxy); native APK/IPA use androidClientId / iosClientId.
  */
+<<<<<<< Updated upstream
 const FALLBACK = {
   expoClientId:
     "17026603435-ealfs4spvrgufc7sv7q9baq3hulu2hig.apps.googleusercontent.com",
@@ -19,12 +20,26 @@ const FALLBACK = {
     "17026603435-50nrfga3r3rs8dp36ai4m0vu861p6mqe.apps.googleusercontent.com",
   webClientId:
     "17026603435-i0ra3c5tq33449tuarsintt88gib9u85.apps.googleusercontent.com",
+=======
+// Same OAuth clients as Laravel `house-expenses-backend` (GOOGLE_*). Overridden by
+// app.json → expo.extra.googleAuth or `EXPO_PUBLIC_GOOGLE_*` in `.env`.
+const FALLBACK = {
+  expoClientId:
+    "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
+  iosClientId:
+    "260136725302-b97apatea1e0r043kk2k9ijra4n9nmq8.apps.googleusercontent.com",
+  androidClientId:
+    "260136725302-35311tt858bni9oan60kpgnsqic20ele.apps.googleusercontent.com",
+  webClientId:
+    "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
+>>>>>>> Stashed changes
 };
 
 
 
 type GoogleAuthExtra = Partial<typeof FALLBACK>;
 
+<<<<<<< Updated upstream
 export function getGoogleOAuthClientIds(): typeof FALLBACK {
   const extra = (Constants.expoConfig as { extra?: { googleAuth?: GoogleAuthExtra } } | null)
     ?.extra?.googleAuth;
@@ -34,6 +49,28 @@ export function getGoogleOAuthClientIds(): typeof FALLBACK {
     iosClientId: extra.iosClientId ?? FALLBACK.iosClientId,
     androidClientId: extra.androidClientId ?? FALLBACK.androidClientId,
     webClientId: extra.webClientId ?? FALLBACK.webClientId,
+=======
+function envClientIds(): GoogleAuthExtra {
+  return {
+    expoClientId: process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID,
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  };
+}
+
+export function getGoogleOAuthClientIds(): typeof FALLBACK {
+  const fromExtra = (Constants.expoConfig as { extra?: { googleAuth?: GoogleAuthExtra } } | null)
+    ?.extra?.googleAuth;
+  const fromEnv = envClientIds();
+  return {
+    expoClientId:
+      fromEnv.expoClientId ?? fromExtra?.expoClientId ?? FALLBACK.expoClientId,
+    iosClientId: fromEnv.iosClientId ?? fromExtra?.iosClientId ?? FALLBACK.iosClientId,
+    androidClientId:
+      fromEnv.androidClientId ?? fromExtra?.androidClientId ?? FALLBACK.androidClientId,
+    webClientId: fromEnv.webClientId ?? fromExtra?.webClientId ?? FALLBACK.webClientId,
+>>>>>>> Stashed changes
   };
 }
 
@@ -70,6 +107,7 @@ export function getGoogleIdTokenAuthRequestOptions() {
   // listed under iOS URL types in app config. Wrong URI → code exchange never completes.
   const redirectUri = useProxy
     ? (() => {
+<<<<<<< Updated upstream
         const uri = AuthSession.makeRedirectUri({
           useProxy: true,
           projectNameForProxy: "@ihabimate/habimate",
@@ -77,6 +115,21 @@ export function getGoogleIdTokenAuthRequestOptions() {
         return uri && uri.startsWith("https://auth.expo.io/")
           ? uri
           : "https://auth.expo.io/@ihabimate/habimate";
+=======
+        const ex = Constants.expoConfig;
+        const projectNameForProxy =
+          ex?.owner && ex?.slug
+            ? (`@${ex.owner}/${ex.slug}` as const)
+            : ("@ihabimate/habimate" as const);
+        const httpsFallback = `https://auth.expo.io/${projectNameForProxy}`;
+        const uri = AuthSession.makeRedirectUri({
+          useProxy: true,
+          projectNameForProxy,
+        } as any);
+        return uri && uri.startsWith("https://auth.expo.io/")
+          ? uri
+          : httpsFallback;
+>>>>>>> Stashed changes
       })()
     : Platform.OS === "ios"
       ? getGoogleIosReversedOauthRedirectUri(ids.iosClientId)

@@ -1,8 +1,14 @@
 {
   "expo": {
+<<<<<<< Updated upstream
     "name": "HabiMate",
     "owner": "ihabimate",
     "slug": "habimate",
+=======
+    "name": "Habimate",
+    "owner": "ihabimate",
+    "slug": "houseexpenses-new",
+>>>>>>> Stashed changes
     "version": "1.0.0",
     "runtimeVersion": {
       "policy": "appVersion"
@@ -29,6 +35,7 @@
       "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+<<<<<<< Updated upstream
         "NSCameraUsageDescription": "Habimate uses your camera to scan house invite QR codes.",
         "NSPhotoLibraryUsageDescription": "Habimate lets you pick an image to scan a QR code.",
         "CFBundleURLTypes": [
@@ -37,6 +44,10 @@
             "CFBundleURLSchemes": ["com.ihabimate.habimate"]
           },
           {
+=======
+        "CFBundleURLTypes": [
+          {
+>>>>>>> Stashed changes
             "CFBundleURLName": "Google Sign-In",
             "CFBundleURLSchemes": [
               "com.googleusercontent.apps.260136725302-b97apatea1e0r043kk2k9ijra4n9nmq8"
@@ -92,7 +103,6 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-sharing",
       "expo-apple-authentication",
       "@react-native-community/datetimepicker",
       "./plugins/withAndroidCleartextTraffic.js"
@@ -104,7 +114,11 @@
       "houseInviteWebBase": "https://habimate.com",
       "router": {},
       "eas": {
+<<<<<<< Updated upstream
         "projectId": "787a84a2-b8f7-4888-9c5b-43cbcc2d638a"
+=======
+        "projectId": "dc409fc6-8287-4979-afc7-02cbc4c142a3"
+>>>>>>> Stashed changes
       },
       "googleAuth": {
         "expoClientId": "260136725302-02bbjcdegkf7pl4hl54rvsbst770p388.apps.googleusercontent.com",
