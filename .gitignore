@@ -85,5 +85,6 @@ yarn-error.*
 # Google Cloud service account keys (server / Expo dashboard only — never ship in the app)
 house-expense-*-*.json
 *-firebase-adminsdk-*.json
+google-services.json
 
 # @end expo-cli
