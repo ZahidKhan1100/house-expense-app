@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { notifySessionTokenCommitted } from "../auth/sessionTokenBridge";
+import { notifyStoredUserUpdated } from "../auth/userSessionBridge";
 import { apiClient } from "../utils/apiClient";
 
 /* ========================== SIGNUP ========================== */
@@ -24,6 +25,7 @@ export const login = async (payload: {
     await AsyncStorage.setItem("token", data.token);
     await AsyncStorage.setItem("user", JSON.stringify(data.user));
     notifySessionTokenCommitted(data.token);
+    notifyStoredUserUpdated();
   }
 
   return data;
@@ -53,6 +55,7 @@ export const socialLogin = async (
     await AsyncStorage.setItem("token", data.token);
     await AsyncStorage.setItem("user", JSON.stringify(data.user));
     notifySessionTokenCommitted(data.token);
+    notifyStoredUserUpdated();
   }
 
   return data;

@@ -44,35 +44,39 @@ import { isLikelyUnreachableError } from "../../src/offline/offlineUtils";
 import { apiClient, getApiErrorMessage } from "../../src/utils/apiClient";
 import { useKeyboardBottomPadding } from "../../src/hooks/useKeyboardBottomPadding";
 import { useTheme } from "../../src/theme/ThemeContext";
+import { SplitRoundingNote } from "../../src/components/SplitRoundingNote";
+import { splitWeightedCents } from "../../src/utils/expenseSplit";
+import {
+  findCategoryByDescription,
+  resolveExpenseDescription,
+} from "../../src/utils/categoryFromDescription";
+import {
+  parseMoneyAmount,
+  sanitizeMoneyAmountInput,
+} from "../../src/utils/moneyAmount";
 import {
   extractReceiptFromImage,
+  isReceiptScanCanceled,
   type ReceiptExtraction,
 } from "../../src/services/receiptScanService";
 
-/** Map AI category_hint to a house category (name overlap + simple semantics). */
+/** Map AI category_hint to a house category (name overlap + semantic bridges). */
 function pickHouseCategoryFromHint(
   hint: string | null | undefined,
   cats: any[],
 ): any | null {
+  const direct = findCategoryByDescription(hint, cats);
+  if (direct) return direct;
+
   if (!hint?.trim() || !cats?.length) return null;
   const h = hint.trim().toLowerCase();
-  const norm = (s: string) => s.trim().toLowerCase();
-
-  const exact = cats.find((c) => norm(String(c?.name ?? "")) === h);
-  if (exact) return exact;
-
-  const partial = cats.find((c) => {
-    const n = norm(String(c?.name ?? ""));
-    return n.includes(h) || h.includes(n);
-  });
-  if (partial) return partial;
 
   let best: any = null;
   let bestScore = 0;
   const hintParts = h.split(/[\s,/]+/).filter((x) => x.length >= 3);
 
   for (const c of cats) {
-    const n = norm(String(c?.name ?? ""));
+    const n = String(c?.name ?? "").trim().toLowerCase();
     if (!n) continue;
     let score = 0;
     for (const part of hintParts) {
@@ -123,6 +127,10 @@ function clampInt(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
+function sameUserId(a: unknown, b: unknown): boolean {
+  return String(a) === String(b);
+}
+
 type CalendarSummaryRow = { away_days: number; guest_extra_days: number };
 
 function normalizeCalendarSummary(
@@ -159,7 +167,7 @@ function buildPendingExpenseDisplay(
     amount:
       typeof p.amount === "number"
         ? p.amount
-        : parseFloat(String(p.amount)),
+        : parseMoneyAmount(String(p.amount)),
     category: cat
       ? { id: cat.id, name: cat.name }
       : { id: p.category_id, name: "Category" },
@@ -266,9 +274,19 @@ export default function Expenses() {
   const [paidBy, setPaidBy] = useState<string | null>(null);
   const [editExpense, setEditExpense] = useState<any>(null);
   const [scanningReceipt, setScanningReceipt] = useState(false);
+  /** Full-screen blocker while the receipt image is uploading / AI extract runs */
+  const [receiptAiOverlayVisible, setReceiptAiOverlayVisible] = useState(false);
+  /** Shown after a few seconds so users know slow responses are normal */
+  const [receiptAiLongWait, setReceiptAiLongWait] = useState(false);
+  /** Blocks double-submit before any await; button also disabled while saving. */
+  const saveExpenseInFlightRef = useRef(false);
+  const [saveExpenseBusy, setSaveExpenseBusy] = useState(false);
   const categoriesRef = useRef(categories);
   categoriesRef.current = categories;
   const pendingCategoryHintRef = useRef<string | null>(null);
+  const receiptScanAbortRef = useRef<AbortController | null>(null);
+  const receiptAiLongWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const receiptAiRequestActiveRef = useRef(false);
   const [splitMethod, setSplitMethod] = useState<SplitMethod>("equal");
   const [advancedSplit, setAdvancedSplit] = useState(false);
   const [excludedDaysByMate, setExcludedDaysByMate] = useState<Record<string, number>>({});
@@ -338,8 +356,12 @@ export default function Expenses() {
         ? prefillParams.category_hint.trim()
         : "";
 
-    if (t) setTitle(t.slice(0, 48));
-    if (a) setAmount(a);
+    if (t) {
+      setTitle(t.slice(0, 48));
+      const matched = findCategoryByDescription(t, categories);
+      if (matched) setSelectedCategory(matched);
+    }
+    if (a) setAmount(sanitizeMoneyAmountInput(a));
     if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
       setCurrentMonthKey(d.slice(0, 7));
     }
@@ -350,9 +372,27 @@ export default function Expenses() {
     setModalVisible(true);
   }, [prefillParams, mates.length, currentUser, categories.length]);
 
+  const clearReceiptAiLongWaitTimer = () => {
+    if (receiptAiLongWaitTimerRef.current) {
+      clearTimeout(receiptAiLongWaitTimerRef.current);
+      receiptAiLongWaitTimerRef.current = null;
+    }
+  };
+
+  const cancelReceiptAiScan = () => {
+    receiptScanAbortRef.current?.abort();
+  };
+
+  useEffect(() => {
+    if (modalVisible) return;
+    if (!receiptAiRequestActiveRef.current) return;
+    receiptScanAbortRef.current?.abort();
+  }, [modalVisible]);
+
   const scanReceipt = async () => {
     if (scanningReceipt) return;
     setScanningReceipt(true);
+    receiptScanAbortRef.current = new AbortController();
     try {
       const choice = await new Promise<"camera" | "gallery" | null>((resolve) => {
         Alert.alert("Receipt quick-scan", "Choose a photo source", [
@@ -403,13 +443,32 @@ export default function Expenses() {
       const uri = result.assets?.[0]?.uri;
       if (!uri) return;
 
-      const extraction = await extractReceiptFromImage(uri);
+      receiptAiRequestActiveRef.current = true;
+      setReceiptAiOverlayVisible(true);
+      setReceiptAiLongWait(false);
+      clearReceiptAiLongWaitTimer();
+      receiptAiLongWaitTimerRef.current = setTimeout(
+        () => setReceiptAiLongWait(true),
+        7000,
+      );
+
+      const extraction = await extractReceiptFromImage(uri, {
+        signal: receiptScanAbortRef.current.signal,
+      });
       applyReceiptExtraction(extraction);
       Alert.alert("Receipt scanned", "We filled what we could — review before saving.");
     } catch (e: any) {
+      if (isReceiptScanCanceled(e)) {
+        return;
+      }
       Alert.alert("Receipt scan failed", e?.message ?? "Please try again.");
     } finally {
+      clearReceiptAiLongWaitTimer();
+      receiptAiRequestActiveRef.current = false;
+      setReceiptAiOverlayVisible(false);
+      setReceiptAiLongWait(false);
       setScanningReceipt(false);
+      receiptScanAbortRef.current = null;
     }
   };
 
@@ -664,12 +723,17 @@ export default function Expenses() {
     }
   }, [selectedCategory, isRentCategory, isUtilityCategory, isGroceriesCategory]);
 
-  // Ensure payer is always in the split
-  useEffect(() => {
-    if (paidBy && !selectedMates.includes(paidBy)) {
-      setSelectedMates((prev) => [...prev, paidBy]);
-    }
-  }, [paidBy]);
+  const handleTitleChange = useCallback(
+    (text: string) => {
+      const next = text.slice(0, 48);
+      setTitle(next);
+      const matched = findCategoryByDescription(next, categories);
+      if (matched) {
+        setSelectedCategory(matched);
+      }
+    },
+    [categories],
+  );
 
   const handleMonthStep = (step: number) => {
     const [year, monthNum] = currentMonthKey.split("-").map(Number);
@@ -680,10 +744,35 @@ export default function Expenses() {
   };
 
   const saveExpense = async () => {
-    if (!title || !amount || !selectedCategory || !paidBy)
-      return Alert.alert("Please fill all fields");
+    if (!amount || !selectedCategory || !paidBy) {
+      return Alert.alert("Please fill all fields", "Amount, category, and who paid are required.");
+    }
+    const description = resolveExpenseDescription(title, selectedCategory?.name);
+    if (!description) {
+      return Alert.alert("Please fill all fields", "Choose a category or enter a description.");
+    }
+    const amountValue = parseMoneyAmount(amount);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      return Alert.alert(
+        "Invalid amount",
+        "Enter a valid amount (use 45.40 or 45,40 — decimals are supported).",
+      );
+    }
+    if (selectedMates.length === 0) {
+      return Alert.alert(
+        "Split required",
+        "Choose at least one person to share the cost. The person who paid can be left out if they are not part of this split.",
+      );
+    }
+    if (saveExpenseInFlightRef.current) return;
+    saveExpenseInFlightRef.current = true;
+    setSaveExpenseBusy(true);
+    try {
     const token = await AsyncStorage.getItem("token");
-    if (!token) return Alert.alert("Error", "Please log in again");
+    if (!token) {
+      Alert.alert("Error", "Please log in again");
+      return;
+    }
 
     const periodDays = getDaysInMonth(currentMonthKey);
     const guestCapSave = periodDays * 3;
@@ -714,8 +803,8 @@ export default function Expenses() {
       }
     }
     const payload: ExpenseCreatePayload = {
-      description: title,
-      amount: parseFloat(amount),
+      description,
+      amount: amountValue,
       category_id: selectedCategory.id,
       included_mates: selectedMates,
       paid_by: paidBy,
@@ -771,6 +860,10 @@ export default function Expenses() {
       }
       Alert.alert("Error", getApiErrorMessage(e, "Something went wrong"));
     }
+    } finally {
+      saveExpenseInFlightRef.current = false;
+      setSaveExpenseBusy(false);
+    }
   };
 
   const discardPendingExpense = (actionId: string) => {
@@ -797,31 +890,27 @@ export default function Expenses() {
   //   });
   // };
 
-  const toggleMate = (id: string) => {
-    setSelectedMates((prev) => {
-      if (prev.includes(id) && id === paidBy) {
-        Alert.alert(
-          "Action Required",
-          "The person who paid must stay in the split list.",
-        );
-        return prev;
-      }
-      return prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id];
-    });
+  const toggleMate = (id: string | number) => {
+    setSelectedMates((prev) =>
+      prev.some((x) => sameUserId(x, id))
+        ? prev.filter((m) => !sameUserId(m, id))
+        : [...prev, id],
+    );
   };
 
   const billDays = useMemo(() => getDaysInMonth(currentMonthKey), [currentMonthKey]);
 
   const selectedMateObjs = useMemo(() => {
-    const set = new Set(selectedMates);
-    return mates.filter((m) => set.has(m.id));
+    return mates.filter((m) =>
+      selectedMates.some((x) => sameUserId(x, m.id)),
+    );
   }, [mates, selectedMates]);
 
   const guestCap = billDays * 3;
 
   const daysPreview = useMemo(() => {
     if (splitMethod !== "days") return null;
-    const total = Number(amount);
+    const total = parseMoneyAmount(amount);
     if (!Number.isFinite(total) || total <= 0) return null;
 
     const awayFor = (mateId: string) => {
@@ -856,11 +945,11 @@ export default function Expenses() {
     }
     if (totalActive <= 0) return { effectiveById, shareById: {} as Record<string, number> };
 
-    const shareById: Record<string, number> = {};
-    for (const m of selectedMateObjs) {
-      const eff = effectiveById[m.id] ?? 0;
-      shareById[m.id] = (total / totalActive) * eff;
-    }
+    const weighted = selectedMateObjs.map((m) => ({
+      id: Number(m.id),
+      weight: effectiveById[m.id] ?? 0,
+    }));
+    const shareById = splitWeightedCents(total, weighted);
     return { effectiveById, shareById };
   }, [
     splitMethod,
@@ -1184,6 +1273,56 @@ export default function Expenses() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: modalKeyboardPad }}
               >
+                <View style={styles.summaryRow}>
+                  <View
+                    style={[
+                      styles.summaryPill,
+                      { borderColor: colors.border },
+                      { backgroundColor: isDark ? "#0B1220" : "#FFFFFF" },
+                    ]}
+                  >
+                    <Text style={[styles.summaryLabel, { color: colors.sub }]}>
+                      Amount
+                    </Text>
+                    <Text style={[styles.summaryValue, { color: colors.text }]}>
+                      {currency}
+                      {(parseMoneyAmount(amount) || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.summaryPill,
+                      { borderColor: colors.border },
+                      { backgroundColor: isDark ? "#0B1220" : "#FFFFFF" },
+                    ]}
+                  >
+                    <Text style={[styles.summaryLabel, { color: colors.sub }]}>
+                      Paid by
+                    </Text>
+                    <Text
+                      style={[styles.summaryValue, { color: colors.text }]}
+                      numberOfLines={1}
+                    >
+                      {mates.find((m) => String(m.id) === String(paidBy))?.name ??
+                        (paidBy ? "Mate" : "—")}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.summaryPill,
+                      { borderColor: colors.border },
+                      { backgroundColor: isDark ? "#0B1220" : "#FFFFFF" },
+                    ]}
+                  >
+                    <Text style={[styles.summaryLabel, { color: colors.sub }]}>
+                      Split
+                    </Text>
+                    <Text style={[styles.summaryValue, { color: colors.text }]}>
+                      {selectedMates?.length ?? 0}
+                    </Text>
+                  </View>
+                </View>
+
                 <View
                   style={[
                     styles.formCard,
@@ -1209,9 +1348,28 @@ export default function Expenses() {
                     {scanningReceipt ? (
                       <ActivityIndicator color={colors.primary} />
                     ) : (
-                      <Text style={{ color: colors.primary, fontSize: 12, fontWeight: "800" }}>
-                        Scan receipt (AI)
-                      </Text>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <MaterialIcons
+                          name="document-scanner"
+                          size={18}
+                          color={colors.primary}
+                        />
+                        <Text
+                          style={{
+                            color: colors.primary,
+                            fontSize: 12,
+                            fontWeight: "800",
+                          }}
+                        >
+                          Scan receipt (AI)
+                        </Text>
+                      </View>
                     )}
                   </TouchableOpacity>
                   <View style={styles.fieldRow}>
@@ -1219,7 +1377,11 @@ export default function Expenses() {
                       <MaterialIcons name="notes" size={18} color={colors.sub} />
                     </View>
                     <TextInput
-                      placeholder="Description"
+                      placeholder={
+                        selectedCategory?.name
+                          ? `Description (optional — uses “${selectedCategory.name}”)`
+                          : "Description (optional — uses category if empty)"
+                      }
                       placeholderTextColor={colors.sub}
                       style={[
                         styles.input,
@@ -1231,7 +1393,8 @@ export default function Expenses() {
                         },
                       ]}
                       value={title}
-                      onChangeText={setTitle}
+                      onChangeText={handleTitleChange}
+                      maxLength={48}
                     />
                   </View>
 
@@ -1255,10 +1418,11 @@ export default function Expenses() {
                       <TextInput
                         placeholder="0.00"
                         placeholderTextColor={colors.sub}
-                        keyboardType="numeric"
+                        keyboardType="decimal-pad"
+                        inputMode="decimal"
                         style={[styles.amountInput, { color: colors.text }]}
                         value={amount}
-                        onChangeText={setAmount}
+                        onChangeText={(t) => setAmount(sanitizeMoneyAmountInput(t))}
                       />
                     </View>
                   </View>
@@ -1307,8 +1471,18 @@ export default function Expenses() {
                 </ScrollView>
 
                 <Text style={[styles.label, { color: colors.text }]}>
-                  Who paid? {currentUser?.role !== "admin" && "(Admin only)"}
+                  Who paid?
                 </Text>
+                {currentUser?.role !== "admin" ? (
+                  <Text style={[styles.helperText, { color: colors.sub }]}>
+                    You can only select yourself. Ask the admin if you need to change
+                    the payer.
+                  </Text>
+                ) : (
+                  <Text style={[styles.helperText, { color: colors.sub }]}>
+                    Pick the person who actually paid this bill.
+                  </Text>
+                )}
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -1370,7 +1544,10 @@ export default function Expenses() {
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    onPress={() => paidBy && setSelectedMates([paidBy])}
+                    onPress={() => {
+                      if (!paidBy) return;
+                      setSelectedMates([paidBy]);
+                    }}
                     style={[styles.miniBtn, { backgroundColor: "#EF444415" }]}
                   >
                     <Text
@@ -1385,36 +1562,58 @@ export default function Expenses() {
                   </TouchableOpacity>
                 </View>
 
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.sub,
+                    marginBottom: 10,
+                    lineHeight: 17,
+                  }}
+                >
+                  Who paid can leave the split unchecked if they floated the bill but are not sharing this expense.
+                </Text>
+
                 <View style={styles.mateGrid}>
-                  {mates.map((m) => (
+                  {mates.map((m) => {
+                    const selected = selectedMates.some((x) =>
+                      sameUserId(x, m.id),
+                    );
+                    const payerChip =
+                      paidBy != null && sameUserId(m.id, paidBy);
+                    const isYouChip =
+                      currentUser != null && sameUserId(m.id, currentUser.id);
+                    return (
                     <TouchableOpacity
                       key={m.id}
                       onPress={() => toggleMate(m.id)}
                       style={[
                         styles.mateCheck,
                         {
-                          backgroundColor: selectedMates.includes(m.id)
+                          backgroundColor: selected
                             ? colors.accent
                             : colors.border + "50",
-                          borderWidth: m.id === paidBy ? 2 : 1,
-                          borderColor:
-                            m.id === paidBy ? colors.text : colors.border,
+                          borderWidth: payerChip ? 2 : 1,
+                          borderColor: payerChip ? colors.text : colors.border,
                         },
                       ]}
                     >
                       <Text
                         style={{
-                          color: selectedMates.includes(m.id)
-                            ? "#fff"
-                            : colors.text,
+                          color: selected ? "#fff" : colors.text,
                           fontSize: 12,
-                          fontWeight: selectedMates.includes(m.id) ? "800" : "700",
+                          fontWeight: selected ? "800" : "700",
                         }}
                       >
-                        {m.name} {m.id === paidBy ? "⭐" : ""}
+                        {m.name}{" "}
+                        {payerChip
+                          ? "⭐"
+                          : isYouChip && !payerChip
+                            ? "(you)"
+                            : ""}
                       </Text>
                     </TouchableOpacity>
-                  ))}
+                  );
+                  })}
                 </View>
 
                 {/* Split settings */}
@@ -1455,6 +1654,17 @@ export default function Expenses() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+
+                {splitMethod === "equal" && selectedMates.length >= 2 && (
+                  <SplitRoundingNote
+                    textColor={colors.text}
+                    subColor={colors.sub}
+                    borderColor={colors.border}
+                    bgColor={isDark ? "#0f172a" : "#f8fafc"}
+                    accent="#2EC4B6"
+                    compact={selectedMates.length > 4}
+                  />
+                )}
 
                 {splitMethod === "days" && (
                   <View
@@ -1660,18 +1870,60 @@ export default function Expenses() {
                 )}
 
                 <TouchableOpacity
-                  style={styles.saveBtn}
+                  style={[
+                    styles.saveBtn,
+                    saveExpenseBusy && { opacity: 0.82 },
+                  ]}
                   onPress={saveExpense}
                   activeOpacity={0.9}
+                  disabled={saveExpenseBusy}
                 >
-                  <Text style={styles.saveBtnText}>
-                    {editExpense ? "Update expense" : "Save expense"}
-                  </Text>
-                  <MaterialIcons name="check-circle" size={18} color="#fff" />
+                  {saveExpenseBusy ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Text style={styles.saveBtnText}>
+                        {editExpense ? "Update expense" : "Save expense"}
+                      </Text>
+                      <MaterialIcons name="check-circle" size={18} color="#fff" />
+                    </>
+                  )}
                 </TouchableOpacity>
               </ScrollView>
             </View>
           </View>
+
+          {receiptAiOverlayVisible ? (
+            <View
+              style={styles.receiptAiBackdrop}
+              pointerEvents="box-none"
+              accessibilityLabel="Receipt scan in progress"
+            >
+              <View
+                style={[
+                  styles.receiptAiCard,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={[styles.receiptAiTitle, { color: colors.text }]}>
+                  {receiptAiLongWait ? "AI is busy" : "Scanning receipt"}
+                </Text>
+                <Text style={[styles.receiptAiBody, { color: colors.sub }]}>
+                  {receiptAiLongWait
+                    ? "Still reading your receipt — this can take a little while."
+                    : "Analyzing your receipt…"}
+                </Text>
+                <TouchableOpacity
+                  onPress={cancelReceiptAiScan}
+                  activeOpacity={0.85}
+                  style={[styles.receiptAiCancelBtn, { borderColor: colors.border }]}
+                >
+                  <Text style={{ color: colors.text, fontWeight: "800" }}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
         </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
@@ -1777,6 +2029,21 @@ const styles = StyleSheet.create({
   modalHeroRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   modalHeroTitle: { color: "#fff", fontSize: 18, fontWeight: "900" },
   modalHeroSub: { color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: "700" },
+  summaryRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 8,
+  },
+  summaryPill: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+  },
+  summaryLabel: { fontSize: 11, fontWeight: "800", textTransform: "uppercase" },
+  summaryValue: { fontSize: 14, fontWeight: "900", marginTop: 2 },
+  helperText: { fontSize: 12, fontWeight: "600", marginTop: -4, marginBottom: 8 },
   modalCloseBtn: {
     width: 36,
     height: 36,
@@ -1900,4 +2167,38 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   saveBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  receiptAiBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    zIndex: 100,
+    elevation: 24,
+  },
+  receiptAiCard: {
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    gap: 10,
+  },
+  receiptAiTitle: { fontSize: 17, fontWeight: "900", textAlign: "center", marginTop: 4 },
+  receiptAiBody: {
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "center",
+    lineHeight: 19,
+    marginBottom: 4,
+  },
+  receiptAiCancelBtn: {
+    marginTop: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
 });

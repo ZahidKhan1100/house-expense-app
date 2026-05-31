@@ -6,6 +6,7 @@ import {
   FlatList,
   Alert,
   TouchableOpacity,
+  Pressable,
   RefreshControl,
   Platform,
 } from "react-native";
@@ -18,6 +19,7 @@ import { useSettlementLock } from "../../../src/context/SettlementLockContext";
 import { useTheme } from "../../../src/theme/ThemeContext";
 import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
 import { apiClient } from "../../../src/utils/apiClient";
+import { UserAvatar } from "../../../src/components/UserAvatar";
 
 export default function Mates() {
   const { isDark } = useTheme();
@@ -159,6 +161,10 @@ export default function Mates() {
     const level = levelFor(karmaBalance);
     const isHouseLegend = !!item.is_house_legend;
 
+    const openMateProfile = () => {
+      router.push(`/mate/${item.id}` as any);
+    };
+
     const cardContent = (
       <View
         style={[
@@ -166,104 +172,117 @@ export default function Mates() {
           { backgroundColor: colors.card, borderColor: colors.border },
         ]}
       >
-        <View style={styles.avatarOuter}>
-          <View
-            style={[
-              styles.avatar,
-              isHouseLegend && styles.avatarLegendRing,
-              {
-                backgroundColor: item.isAdmin
-                  ? colors.accent + "20"
-                  : colors.primary + "15",
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.avatarText,
-                { color: item.isAdmin ? colors.accent : colors.primary },
-              ]}
+        <Pressable
+          onPress={openMateProfile}
+          style={styles.cardTapRow}
+          android_ripple={
+            Platform.OS === "android" ? { color: "rgba(0,0,0,0.06)" } : undefined
+          }
+        >
+          <View style={styles.avatarOuter}>
+            <View
+              style={[styles.avatar, isHouseLegend && styles.avatarLegendRing]}
             >
-              {item.name?.charAt(0).toUpperCase()}
+              <UserAvatar
+                name={String(item.name ?? "?")}
+                avatarUrl={
+                  typeof item.avatar_url === "string"
+                    ? item.avatar_url.trim()
+                    : null
+                }
+                size={48}
+                borderRadius={16}
+                bg={item.isAdmin ? colors.accent + "20" : colors.primary + "15"}
+                letterColor={
+                  item.isAdmin ? colors.accent : colors.primary
+                }
+              />
+            </View>
+            {isHouseLegend && (
+              <View style={styles.legendCrownTag}>
+                <FontAwesome5 name="crown" size={9} color="#FFD700" />
+              </View>
+            )}
+          </View>
+
+          <View style={{ flex: 1, marginLeft: 15 }}>
+            <View style={styles.nameRow}>
+              <View style={styles.nameLeft}>
+                <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                {!!item.is_founder && (
+                  <View style={styles.founderMini}>
+                    <FontAwesome5 name="award" size={9} color="#fff" />
+                    <Text style={styles.founderMiniText}>Founder</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.badgesRow}>
+                {item.isAdmin && (
+                  <View
+                    style={[
+                      styles.badge,
+                      { backgroundColor: colors.accent + "20" },
+                    ]}
+                  >
+                    <Text style={[styles.badgeText, { color: colors.accent }]}>
+                      ADMIN
+                    </Text>
+                  </View>
+                )}
+                {item.pending && (
+                  <View
+                    style={[
+                      styles.badge,
+                      { backgroundColor: colors.pending + "20" },
+                    ]}
+                  >
+                    <Text style={[styles.badgeText, { color: colors.pending }]}>
+                      PENDING
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+            <Text style={[styles.email, { color: colors.sub }]}>
+              {item.email}
             </Text>
           </View>
-          {isHouseLegend && (
-            <View style={styles.legendCrownTag}>
-              <FontAwesome5 name="crown" size={9} color="#FFD700" />
+
+          {!item.pending && (
+            <View style={styles.karmaBox}>
+              <Text style={[styles.karmaTop, { color: colors.text }]}>
+                Lvl {level}
+              </Text>
+              <Text style={[styles.karmaSub, { color: colors.sub }]}>
+                {karmaBalance.toLocaleString()} pts
+              </Text>
             </View>
           )}
-        </View>
 
-        <View style={{ flex: 1, marginLeft: 15 }}>
-          <View style={styles.nameRow}>
-            <View style={styles.nameLeft}>
-              <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>
-                {item.name}
-              </Text>
-              {!!item.is_founder && (
-                <View style={styles.founderMini}>
-                  <FontAwesome5 name="award" size={9} color="#fff" />
-                  <Text style={styles.founderMiniText}>Founder</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.badgesRow}>
-              {item.isAdmin && (
-                <View
-                  style={[
-                    styles.badge,
-                    { backgroundColor: colors.accent + "20" },
-                  ]}
-                >
-                  <Text style={[styles.badgeText, { color: colors.accent }]}>
-                    ADMIN
-                  </Text>
-                </View>
-              )}
-              {item.pending && (
-                <View
-                  style={[
-                    styles.badge,
-                    { backgroundColor: colors.pending + "20" },
-                  ]}
-                >
-                  <Text style={[styles.badgeText, { color: colors.pending }]}>
-                    PENDING
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-          <Text style={[styles.email, { color: colors.sub }]}>
-            {item.email}
-          </Text>
-        </View>
-
-        {!item.pending && (
-          <View style={styles.karmaBox}>
-            <Text style={[styles.karmaTop, { color: colors.text }]}>
-              Lvl {level}
-            </Text>
-            <Text style={[styles.karmaSub, { color: colors.sub }]}>
-              {karmaBalance.toLocaleString()} pts
-            </Text>
-          </View>
-        )}
-
-        {isAdmin && item.pending && (
+          {isAdmin && item.pending && (
+            <MaterialIcons
+              name="swipe"
+              size={18}
+              color={colors.sub}
+              style={{ opacity: 0.5, marginRight: 4 }}
+            />
+          )}
           <MaterialIcons
-            name="swipe"
-            size={18}
+            name="chevron-right"
+            size={22}
             color={colors.sub}
-            style={{ opacity: 0.5 }}
+            style={{ opacity: 0.65 }}
           />
-        )}
+        </Pressable>
 
         {isAdmin && !item.pending && !item.isAdmin && (
           <TouchableOpacity
             onPress={() => confirmRemoveMateFromHouse(item)}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityLabel={`Remove ${item.name} from house`}
+            style={styles.removeMateBtn}
           >
             <MaterialCommunityIcons
               name="account-remove-outline"
@@ -403,7 +422,9 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 14,
+    paddingVertical: 14,
+    paddingLeft: 14,
+    paddingRight: 8,
     borderRadius: 20,
     marginBottom: 12,
     borderWidth: 1,
@@ -417,6 +438,14 @@ const styles = StyleSheet.create({
       android: { elevation: 2 },
     }),
   },
+  cardTapRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 48,
+    paddingRight: 6,
+  },
+  removeMateBtn: { paddingLeft: 4, paddingRight: 6, justifyContent: "center" },
 
   avatarOuter: { position: "relative", marginRight: 0 },
   avatar: {
@@ -443,8 +472,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 3,
   },
-  avatarText: { fontWeight: "bold", fontSize: 20 },
-
   nameRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   nameLeft: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   badgesRow: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 },

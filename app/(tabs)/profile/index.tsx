@@ -15,7 +15,9 @@ import {
   Platform,
   KeyboardAvoidingView,
   Linking,
+  Image,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
@@ -33,6 +35,10 @@ import { useKeyboardBottomPadding } from "../../../src/hooks/useKeyboardBottomPa
 import * as LocalAuthentication from "expo-local-authentication";
 import { requestWebNotificationPermission, webNotificationsSupported } from "../../../src/realtime/webNotifications";
 import { HABIMATE_PROMISE_SUMMARY, LEGAL_URLS } from "../../../src/config/legal";
+import { uploadImageViaHouseWallSignature } from "../../../src/utils/cloudinaryWallUpload";
+import { notifyStoredUserUpdated } from "../../../src/auth/userSessionBridge";
+import { profileAvatarUrl } from "../../../src/utils/profileAvatarUrl";
+import { FullScreenImageModal } from "../../../src/components/FullScreenImageModal";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -99,6 +105,10 @@ export default function Profile() {
   const [faceIdEnabled, setFaceIdEnabled] = useState(false);
   const [webNotifEnabled, setWebNotifEnabled] = useState(false);
   const [guestWeightStr, setGuestWeightStr] = useState("100");
+  const [displayName, setDisplayName] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarPreviewOpen, setAvatarPreviewOpen] = useState(false);
 
   const mainScrollPad = useKeyboardBottomPadding(100);
   const currencyModalPad = useKeyboardBottomPadding(28);
@@ -115,7 +125,13 @@ export default function Profile() {
   const fetchProfile = async () => {
     try {
       const profile = await apiClient("/profile", "GET");
+      if (!profile || typeof profile !== "object") {
+        throw new Error("Invalid profile response");
+      }
       setUserData(profile);
+      setDisplayName(
+        typeof profile?.name === "string" ? profile.name : "",
+      );
       if (profile.house) {
         setHouseName(profile.house.name);
         setCurrency(profile.house.currency || "$");
@@ -123,14 +139,116 @@ export default function Profile() {
           String(profile.house.guest_day_weight_percent ?? 100),
         );
       }
+      try {
+        await AsyncStorage.setItem("user", JSON.stringify(profile));
+        // Avoid notifyStoredUserUpdated here — opening Profile would reload every
+        // useStoredUser subscriber (e.g. Wall) at once and can destabilize iOS.
+      } catch {
+        /* ignore */
+      }
     } catch (err: any) {
       if (err instanceof ApiClientError && err.status === 401) {
         router.replace("/(auth)/login");
         return;
       }
       console.error("Profile Load Error:", err);
+      try {
+        const raw = await AsyncStorage.getItem("user");
+        if (raw) {
+          const cached = JSON.parse(raw) as Record<string, unknown>;
+          if (cached && typeof cached === "object" && typeof cached.id !== "undefined") {
+            setUserData(cached as any);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const mergeStoredUser = async (patch: Record<string, unknown>) => {
+    try {
+      const raw = await AsyncStorage.getItem("user");
+      const u = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      await AsyncStorage.setItem("user", JSON.stringify({ ...u, ...patch }));
+      notifyStoredUserUpdated();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const saveDisplayName = async () => {
+    const next = displayName.trim();
+    if (!next) {
+      Alert.alert("Invalid name", "Please enter your name.");
+      return;
+    }
+    try {
+      await apiClient("/profile", "PUT", { name: next });
+      await mergeStoredUser({ name: next });
+      setEditingName(false);
+      await fetchProfile();
+    } catch (err) {
+      Alert.alert("Error", getApiErrorMessage(err, "Could not update your name."));
+    }
+  };
+
+  const pickProfilePhoto = async () => {
+    const choice = await new Promise<"camera" | "gallery" | null>((resolve) => {
+      Alert.alert("Profile photo", "Choose a source", [
+        { text: "Camera", onPress: () => resolve("camera") },
+        { text: "Photo library", onPress: () => resolve("gallery") },
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+      ]);
+    });
+    if (!choice) return;
+
+    let uri: string | undefined;
+    if (choice === "camera") {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== "granted") {
+        Alert.alert("Permission needed", "Please allow camera access to take a photo.");
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.9,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+      if (!result.canceled) uri = result.assets?.[0]?.uri;
+    } else {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== "granted") {
+        Alert.alert("Permission needed", "Please allow photo access to pick an image.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+      if (!result.canceled) uri = result.assets?.[0]?.uri;
+    }
+    if (!uri) return;
+
+    setUploadingAvatar(true);
+    try {
+      const { url } = await uploadImageViaHouseWallSignature(uri, {
+        maxWidth: 800,
+        compress: 0.82,
+        fileName: "avatar.jpg",
+      });
+      await apiClient("/profile", "PUT", { avatar_url: url });
+      await mergeStoredUser({ avatar_url: url });
+      await fetchProfile();
+      Alert.alert("Updated", "Your profile photo was saved.");
+    } catch (err) {
+      Alert.alert("Error", getApiErrorMessage(err, "Could not update your photo."));
+    } finally {
+      setUploadingAvatar(false);
     }
   };
 
@@ -262,8 +380,16 @@ export default function Profile() {
       if (type === "currency") {
         setCurrency(value);
         setShowCurrencyModal(false);
+        setUserData((prev: any) => ({
+          ...prev,
+          house: { ...prev.house, currency: value },
+        }));
       } else {
         setEditingHouse(false);
+        setUserData((prev: any) => ({
+          ...prev,
+          house: { ...prev.house, name: value },
+        }));
       }
     } catch (err) {
       Alert.alert("Error", "Update failed");
@@ -319,6 +445,7 @@ export default function Profile() {
 
   const isAdmin = userData.role === "admin";
   const settlementLocked = !!userData.has_pending_settlements;
+  const headerAvatarUri = profileAvatarUrl(userData as Record<string, unknown>);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
@@ -338,11 +465,34 @@ export default function Profile() {
           <SafeAreaView edges={["top"]}>
             <View style={styles.profileHeader}>
               <View style={styles.avatarContainer}>
-                <View style={styles.avatarMain}>
-                  <Text style={styles.avatarLetter}>
-                    {userData.name.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    if (uploadingAvatar) return;
+                    if (headerAvatarUri) setAvatarPreviewOpen(true);
+                    else void pickProfilePhoto();
+                  }}
+                  onLongPress={() => {
+                    if (!uploadingAvatar) void pickProfilePhoto();
+                  }}
+                  delayLongPress={380}
+                  disabled={uploadingAvatar}
+                  style={styles.avatarMain}
+                >
+                  {uploadingAvatar ? (
+                    <ActivityIndicator color="#FF6A6A" />
+                  ) : headerAvatarUri ? (
+                    <Image
+                      source={{ uri: headerAvatarUri }}
+                      style={styles.avatarImageFill}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <Text style={styles.avatarLetter}>
+                      {(userData.name || "?").charAt(0).toUpperCase()}
+                    </Text>
+                  )}
+                </TouchableOpacity>
                 <View style={styles.roleBadge}>
                   <FontAwesome5
                     name={isAdmin ? "crown" : "user"}
@@ -351,7 +501,7 @@ export default function Profile() {
                   />
                 </View>
               </View>
-              <Text style={styles.nameText}>{userData.name}</Text>
+              <Text style={styles.nameText}>{userData.name || "—"}</Text>
               {!!userData.is_founder && (
                 <LinearGradient
                   colors={["#FFD700", "#FF6A6A"]}
@@ -393,8 +543,130 @@ export default function Profile() {
               </Text>
             </View>
           )}
-          {/* GROUP 1: PREFERENCES */}
+          {/* YOUR PROFILE — all house members */}
           <Text style={[styles.sectionTitle, { color: colors.subText }]}>
+            Your profile
+          </Text>
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <View style={[styles.row, styles.profileYourRow]}>
+              <View style={[styles.rowIconLabel, styles.profileYourRowLead]}>
+                <View style={[styles.iconBox, { backgroundColor: "#EC489920" }]}>
+                  <MaterialCommunityIcons
+                    name="account-circle-outline"
+                    size={20}
+                    color="#EC4899"
+                  />
+                </View>
+                <View style={styles.profileYourRowText}>
+                  <Text style={[styles.rowText, { color: colors.text }]}>
+                    Profile photo
+                  </Text>
+                  <Text style={{ fontSize: 12, color: colors.subText, marginTop: 2 }}>
+                    Tap your photo to view full size. Long-press the header photo or use
+                    Change below to update it — housemates see this in the app.
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={pickProfilePhoto}
+                disabled={uploadingAvatar}
+                style={[
+                  styles.profileYourRowAction,
+                  { opacity: uploadingAvatar ? 0.45 : 1 },
+                ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={[styles.actionLink, { color: colors.accent }]}>
+                  Change
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={[styles.row, styles.profileYourRow]}>
+              <View style={[styles.rowIconLabel, styles.profileYourRowLead]}>
+                <View style={[styles.iconBox, { backgroundColor: "#8B5CF620" }]}>
+                  <MaterialCommunityIcons name="rename-box" size={18} color="#8B5CF6" />
+                </View>
+                <View style={styles.profileYourRowText}>
+                  <Text style={[styles.rowText, { color: colors.text }]}>
+                    Your name
+                  </Text>
+                  {!editingName && (
+                    <Text
+                      style={[
+                        styles.houseValueDisplay,
+                        { color: colors.accent },
+                      ]}
+                    >
+                      {displayName ||
+                        userData.name ||
+                        "—"}
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setEditingName(!editingName);
+                  setDisplayName(
+                    typeof userData.name === "string" ? userData.name : "",
+                  );
+                }}
+                style={styles.profileYourRowAction}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text
+                  style={[
+                    styles.actionLink,
+                    { color: editingName ? colors.subText : colors.accent },
+                  ]}
+                >
+                  {editingName ? "Cancel" : "Edit"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {editingName && (
+              <View style={styles.inputWrapper}>
+                <View
+                  style={[
+                    styles.inlineInput,
+                    { backgroundColor: isDark ? "#0F172A" : "#F1F5F9" },
+                  ]}
+                >
+                  <TextInput
+                    style={[styles.inputField, { color: colors.text }]}
+                    value={displayName}
+                    onChangeText={setDisplayName}
+                    autoFocus
+                    placeholder="Your display name..."
+                    placeholderTextColor={colors.subText}
+                  />
+                  <TouchableOpacity
+                    style={styles.saveIconBtn}
+                    onPress={saveDisplayName}
+                  >
+                    <MaterialIcons name="check" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+
+          {/* GROUP 1: PREFERENCES */}
+          <Text
+            style={[
+              styles.sectionTitle,
+              { color: colors.subText, marginTop: 25 },
+            ]}
+          >
             Preferences
           </Text>
           <View
@@ -418,6 +690,26 @@ export default function Profile() {
                 </View>
                 <Text style={[styles.rowText, { color: colors.text }]}>
                   What’s new
+                </Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={colors.subText} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push("/feature-guide" as any)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.rowIconLabel}>
+                <View style={[styles.iconBox, { backgroundColor: "#0EA5E920" }]}>
+                  <MaterialCommunityIcons
+                    name="book-open-page-variant"
+                    size={18}
+                    color="#0EA5E9"
+                  />
+                </View>
+                <Text style={[styles.rowText, { color: colors.text }]}>
+                  How bills & splits work
                 </Text>
               </View>
               <MaterialIcons name="chevron-right" size={22} color={colors.subText} />
@@ -812,6 +1104,25 @@ export default function Profile() {
               </View>
               <FontAwesome5 name="chevron-right" size={10} color={colors.accent} />
             </TouchableOpacity>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                const ok = await Linking.canOpenURL(LEGAL_URLS.deleteAccount);
+                if (ok) Linking.openURL(LEGAL_URLS.deleteAccount);
+                else Alert.alert("Unable to open link", LEGAL_URLS.deleteAccount);
+              }}
+            >
+              <View style={styles.rowIconLabel}>
+                <View style={[styles.iconBox, { backgroundColor: "#EF444415" }]}>
+                  <MaterialCommunityIcons name="account-remove-outline" size={18} color="#EF4444" />
+                </View>
+                <Text style={[styles.rowText, { color: colors.text }]}>
+                  Account deletion (website)
+                </Text>
+              </View>
+              <FontAwesome5 name="chevron-right" size={10} color={colors.accent} />
+            </TouchableOpacity>
           </View>
 
           {/* GROUP: DANGER ZONE */}
@@ -945,6 +1256,12 @@ export default function Profile() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <FullScreenImageModal
+        visible={avatarPreviewOpen}
+        uri={headerAvatarUri}
+        onClose={() => setAvatarPreviewOpen(false)}
+      />
     </View>
   );
 }
@@ -968,11 +1285,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     elevation: 8,
+    overflow: "hidden",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
   },
+  avatarImageFill: { width: "100%", height: "100%" },
   avatarLetter: { fontSize: 38, fontWeight: "900", color: "#FF6A6A" },
   roleBadge: {
     position: "absolute",
@@ -1027,6 +1346,27 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     padding: 15,
+  },
+  /** Keeps trailing actions visible when subtitle wraps (card uses overflow:hidden). */
+  profileYourRow: {
+    alignItems: "flex-start",
+  },
+  profileYourRowLead: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+    alignItems: "flex-start",
+    paddingRight: 8,
+  },
+  profileYourRowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  profileYourRowAction: {
+    flexShrink: 0,
+    alignSelf: "center",
+    paddingVertical: 2,
+    paddingHorizontal: 2,
   },
   rowIconLabel: { flexDirection: "row", alignItems: "center" },
   iconBox: {

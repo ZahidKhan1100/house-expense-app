@@ -15,7 +15,12 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../../src/utils/apiClient";
 import { splitEqualCents } from "../../src/utils/expenseSplit";
+import {
+  parseMoneyAmount,
+  sanitizeMoneyAmountInput,
+} from "../../src/utils/moneyAmount";
 import { useTheme } from "../../src/theme/ThemeContext";
+import { SplitRoundingNote } from "../../src/components/SplitRoundingNote";
 
 type Mate = { id: number; name?: string; email?: string };
 
@@ -99,7 +104,7 @@ export default function NewBuyback() {
     .map(([id]) => Number(id))
     .filter((id) => Number.isFinite(id) && (meId == null || id !== meId));
 
-  const parsedAmount = Number(amount);
+  const parsedAmount = parseMoneyAmount(amount);
   const shareMap =
     participantIds.length > 0 && Number.isFinite(parsedAmount) && parsedAmount > 0
       ? splitEqualCents(parsedAmount, participantIds)
@@ -113,7 +118,7 @@ export default function NewBuyback() {
   };
 
   const onSave = async () => {
-    const amt = Number(amount);
+    const amt = parseMoneyAmount(amount);
     if (!title.trim()) {
       Alert.alert("Add a title", "Example: Router buy-back, Shared supplies.");
       return;
@@ -194,8 +199,9 @@ export default function NewBuyback() {
           <Text style={[styles.label, { color: colors.sub, marginTop: 14 }]}>Total amount</Text>
           <TextInput
             value={amount}
-            onChangeText={setAmount}
+            onChangeText={(t) => setAmount(sanitizeMoneyAmountInput(t))}
             keyboardType="decimal-pad"
+            inputMode="decimal"
             placeholder="60"
             placeholderTextColor={colors.sub}
             style={[styles.input, { color: colors.text, borderColor: colors.border }]}
@@ -248,6 +254,17 @@ export default function NewBuyback() {
                   : `${shareMin.toFixed(2)}–${shareMax.toFixed(2)} each (cent split)`}{" "}
               · total {Number.isFinite(parsedAmount) ? parsedAmount.toFixed(2) : "0.00"}
             </Text>
+            {participantIds.length >= 2 && (
+              <SplitRoundingNote
+                textColor={colors.text}
+                subColor={colors.sub}
+                borderColor={colors.border}
+                bgColor={isDark ? "#0f172a" : "#f8fafc"}
+                accent={colors.teal}
+                compact
+                showFeatureGuideLink
+              />
+            )}
           </View>
         </View>
 

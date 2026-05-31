@@ -1,0 +1,4 @@
+# Copy to android/local.properties (create android/ first if needed).
+# Or set ANDROID_HOME—Gradle still prefers sdk.dir on some setups.
+# Typical macOS path after Android Studio:
+sdk.dir=/Users/YOU/Library/Android/sdk

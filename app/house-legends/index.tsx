@@ -15,10 +15,12 @@ import { useRouter } from "expo-router";
 
 import { apiClient } from "../../src/utils/apiClient";
 import { useTheme } from "../../src/theme/ThemeContext";
+import { UserAvatar } from "../../src/components/UserAvatar";
 
 type Row = {
   id: number;
   name: string;
+  avatar_url?: string | null;
   karma_balance: number;
   level: number;
   is_founder?: boolean;
@@ -69,6 +71,10 @@ export default function HouseLegends() {
 
   const medal = (rank: number) => (rank === 1 ? "🥇" : rank === 2 ? "🥈" : "🥉");
 
+  const goMateProfile = (id: number) => {
+    router.push(`/mate/${id}` as any);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
       <View style={styles.header}>
@@ -113,7 +119,15 @@ export default function HouseLegends() {
                     )}
                     <Text style={styles.topMedal}>{medal(rank)}</Text>
                     <View style={[styles.heroAvatar, isLegend && styles.heroAvatarLegend]}>
-                      <Text style={styles.heroAvatarText}>{u.name.charAt(0).toUpperCase()}</Text>
+                      <UserAvatar
+                        name={u.name}
+                        avatarUrl={u.avatar_url}
+                        size={44}
+                        borderRadius={16}
+                        bg="rgba(255,255,255,0.22)"
+                        letterColor="#fff"
+                        onPress={() => goMateProfile(u.id)}
+                      />
                     </View>
                     <Text style={styles.topName} numberOfLines={1}>
                       {u.name}
@@ -138,8 +152,16 @@ export default function HouseLegends() {
                 <View style={[styles.row, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Text style={[styles.rank, { color: colors.sub }]}>{rank}</Text>
                   <View style={styles.avatarWrap}>
-                    <View style={[styles.avatar, isLegend && styles.avatarLegend]}>
-                      <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
+                    <View style={[styles.avatarLegendShell, isLegend && styles.avatarLegend]}>
+                      <UserAvatar
+                        name={item.name}
+                        avatarUrl={item.avatar_url}
+                        size={38}
+                        borderRadius={14}
+                        bg="rgba(255,106,106,0.12)"
+                        letterColor={CORAL}
+                        onPress={() => goMateProfile(item.id)}
+                      />
                     </View>
                     {isLegend && (
                       <View style={styles.avatarCrownBadge}>
@@ -219,7 +241,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  heroAvatarText: { color: "#fff", fontWeight: "900", fontSize: 18 },
   topMedal: { fontSize: 18, fontWeight: "900" },
   topName: { color: "#fff", fontWeight: "900", marginTop: 6 },
   topMeta: { color: "rgba(255,255,255,0.85)", fontWeight: "800", fontSize: 11, marginTop: 4 },
@@ -227,7 +248,14 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 18, borderWidth: 1, marginBottom: 10 },
   rank: { width: 24, textAlign: "center", fontWeight: "900" },
   avatarWrap: { position: "relative" },
-  avatar: { width: 38, height: 38, borderRadius: 14, backgroundColor: "rgba(255,106,106,0.15)", alignItems: "center", justifyContent: "center" },
+  avatarLegendShell: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
   avatarLegend: {
     borderWidth: 2,
     borderColor: "#FFD700",
@@ -244,7 +272,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     padding: 2,
   },
-  avatarText: { color: CORAL, fontWeight: "900" },
   name: { fontWeight: "900" },
   meta: { marginTop: 2, fontWeight: "700", fontSize: 12 },
   founderMini: { width: 24, height: 24, borderRadius: 10, alignItems: "center", justifyContent: "center" },

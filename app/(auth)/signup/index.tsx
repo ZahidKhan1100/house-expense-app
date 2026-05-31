@@ -8,7 +8,6 @@ import * as Google from "expo-auth-session/providers/google";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { useEffect, useRef, useState } from "react";
 import {
     Alert,
@@ -31,12 +30,15 @@ import {
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { useKeyboardBottomPadding } from "../../../src/hooks/useKeyboardBottomPadding";
+import { useGoogleOauthDebug } from "../../../src/hooks/useGoogleOauthDebug";
 
 import { notifySessionTokenCommitted } from "../../../src/auth/sessionTokenBridge";
+import { notifyStoredUserUpdated } from "../../../src/auth/userSessionBridge";
 import {
     getGoogleIdTokenAuthRequestOptions,
     shouldUseGoogleAuthProxy,
 } from "../../../src/config/googleAuth";
+import { setGoogleOauthReturnHref } from "../../../src/utils/googleOauthReturnPath";
 import { signup, socialLogin } from "../../../src/services/authService";
 import { getGoogleIdTokenFromAuthResponse } from "../../../src/utils/googleAuthSession";
 import { getApiErrorMessage } from "../../../src/utils/apiClient";
@@ -49,7 +51,6 @@ import {
   peekPendingHouseCode,
 } from "../../../src/utils/houseInviteLink";
 
-WebBrowser.maybeCompleteAuthSession();
 const { width, height } = Dimensions.get("window");
 
 export default function Signup() {
@@ -89,6 +90,7 @@ export default function Signup() {
       await AsyncStorage.setItem("token", token);
       if (user) {
         await AsyncStorage.setItem("user", JSON.stringify(user));
+        notifyStoredUserUpdated();
       }
       notifySessionTokenCommitted(token);
     } catch (e) {
@@ -186,11 +188,22 @@ export default function Signup() {
     getGoogleIdTokenAuthRequestOptions(),
   );
   const googleInFlightRef = useRef(false);
+  /** Same success `response` can run this effect twice (Strict Mode / hook updates); avoid duplicate API + navigation. */
+  const handledGoogleIdTokenRef = useRef<string | null>(null);
+  useGoogleOauthDebug("signup", response);
 
   useEffect(() => {
     if (response?.type === "success") {
       const idToken = getGoogleIdTokenFromAuthResponse(response);
-      if (idToken) handleSocialLogin("google", idToken);
+      if (idToken) {
+        if (handledGoogleIdTokenRef.current === idToken) return;
+        handledGoogleIdTokenRef.current = idToken;
+        void handleSocialLogin("google", idToken);
+      } else {
+        setError(
+          "Google did not return an ID token. On Android release builds, add your upload keystore SHA‑1 to the Android OAuth client in Google Cloud and ensure “Custom URI scheme” is enabled for that client.",
+        );
+      }
     } else if (response?.type === "error") {
       const p = response.params;
       setError(
@@ -507,8 +520,14 @@ export default function Signup() {
                       !googleInFlightRef.current &&
                       (() => {
                         googleInFlightRef.current = true;
+                        handledGoogleIdTokenRef.current = null;
                         Promise.resolve(
-                          promptAsync({ useProxy: shouldUseGoogleAuthProxy() } as any),
+                          (async () => {
+                            await setGoogleOauthReturnHref("/(auth)/signup");
+                            return promptAsync({
+                              useProxy: shouldUseGoogleAuthProxy(),
+                            } as any);
+                          })(),
                         )
                           .catch(() => {})
                           .finally(() => {
@@ -538,7 +557,7 @@ export default function Signup() {
                       styles.socialBtn,
                       { backgroundColor: colors.primary },
                     ]}
-                    onPress={() => router.replace("/scan-qr")}
+                    onPress={() => router.push("/scan-qr")}
                   >
                     <Ionicons name="qr-code" size={22} color="#fff" />
                   </TouchableOpacity>

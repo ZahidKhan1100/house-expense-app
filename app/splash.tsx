@@ -1,12 +1,10 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef } from "react";
 import {
   ActivityIndicator,
   Animated,
   Dimensions,
-  Easing,
   Image,
   Platform,
   StyleSheet,
@@ -16,9 +14,21 @@ import {
 
 const { width } = Dimensions.get("window");
 
+/**
+ * Presentational splash only. Routing lives in `app/index.tsx` (`boot()`).
+ *
+ * History: previously this screen duplicated auth checks and called
+ * `router.replace` after a 2.5s delay without cancel-on-unmount, which fired a
+ * second navigation to login. The infinite `Animated.loop` over a translucent
+ * gradient also caused the status bar to flicker → crash on some Samsung One UI
+ * devices (S24 reports). We now:
+ *
+ *   - Lock the status bar style via `expo-status-bar` (light, translucent) so
+ *     the OS doesn't repeatedly recolor it during the splash → app handoff.
+ *   - Run the fade/scale entrance only — no infinite loop. The orbs still
+ *     translate once via the entrance animation; no re-rendering forever.
+ */
 export default function HabiMateSplash() {
-  const router = useRouter();
-
   // --- BRAND COLORS (Matching Login/Signup) ---
   const colors = {
     primary: "#FF6A6A",
@@ -28,15 +38,13 @@ export default function HabiMateSplash() {
 
   // --- ANIMATION VALUES ---
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const floatAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
 
   useEffect(() => {
-    // 1. Start Animations
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 1200,
+        duration: 700,
         useNativeDriver: true,
       }),
       Animated.spring(scaleAnim, {
@@ -46,75 +54,18 @@ export default function HabiMateSplash() {
         useNativeDriver: true,
       }),
     ]).start();
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(floatAnim, {
-          toValue: 1,
-          duration: 3000,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(floatAnim, {
-          toValue: 0,
-          duration: 3000,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ]),
-    ).start();
-
-    // 2. Logic to check auth and move forward
-    const checkAuth = async () => {
-      // Small delay so user sees the beautiful splash
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-
-      const token = await AsyncStorage.getItem("token");
-      const userStr = await AsyncStorage.getItem("user");
-
-      if (token && userStr) {
-        const user = JSON.parse(userStr);
-        if (user.house_id) {
-          router.replace("/(tabs)/dashboard");
-        } else {
-          router.replace("/choose-house");
-        }
-      } else {
-        router.replace("/(auth)/login");
-      }
-    };
-
-    checkAuth();
-  }, []);
-
-  const floatingY = floatAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -20],
-  });
+  }, [fadeAnim, scaleAnim]);
 
   return (
     <View style={styles.container}>
+      <StatusBar style="light" translucent backgroundColor="transparent" />
       <LinearGradient
         colors={[colors.primaryLight, colors.primary, colors.bgDark]}
         style={styles.gradient}
       >
-        {/* Floating Orbs */}
-        <Animated.View
-          style={[
-            styles.orb,
-            styles.orb1,
-            { transform: [{ translateY: floatingY }] },
-          ]}
-        />
-        <Animated.View
-          style={[
-            styles.orb,
-            styles.orb2,
-            { transform: [{ translateY: Animated.multiply(floatingY, -1.2) }] },
-          ]}
-        />
+        <View style={[styles.orb, styles.orb1]} />
+        <View style={[styles.orb, styles.orb2]} />
 
-        {/* Logo and Branding */}
         <Animated.View
           style={[
             styles.content,
@@ -163,7 +114,7 @@ const styles = StyleSheet.create({
     height: 140,
     padding: 20,
     borderRadius: 40,
-    backgroundColor: "#FFFFFF", // Logo looks best on clean white
+    backgroundColor: "#FFFFFF",
     marginBottom: 25,
     justifyContent: "center",
     alignItems: "center",

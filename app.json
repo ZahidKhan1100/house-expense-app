@@ -3,10 +3,8 @@
     "name": "HabiMate",
     "owner": "ihabimate",
     "slug": "habimate",
-    "version": "1.0.0",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "version": "1.0.4",
+    "runtimeVersion": "1.0.4",
     "updates": {
       "enabled": true,
       "url": "https://u.expo.dev/787a84a2-b8f7-4888-9c5b-43cbcc2d638a",
@@ -28,13 +26,18 @@
       "bundleIdentifier": "com.ihabimate.habimate",
       "usesAppleSignIn": true,
       "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Habimate uses your camera to scan house invite QR codes.",
         "NSPhotoLibraryUsageDescription": "Habimate lets you pick an image to scan a QR code.",
         "CFBundleURLTypes": [
           {
             "CFBundleURLName": "Habimate",
-            "CFBundleURLSchemes": ["com.ihabimate.habimate"]
+            "CFBundleURLSchemes": [
+              "com.ihabimate.habimate"
+            ]
           },
           {
             "CFBundleURLName": "Google Sign-In",
@@ -43,16 +46,21 @@
             ]
           }
         ]
-      }
+      },
+      "buildNumber": "10"
     },
     "android": {
       "package": "com.ihabimate.habimate",
+      "versionCode": 13,
       "googleServicesFile": "./google-services.json",
       "userInterfaceStyle": "light",
       "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ],
       "permissions": [
         "CAMERA",
-        "READ_MEDIA_IMAGES",
         "NOTIFICATIONS",
         "POST_NOTIFICATIONS",
         "android.permission.CAMERA",
@@ -88,7 +96,6 @@
       ],
       "expo-router",
       "expo-updates",
-      "@sentry/react-native/expo",
       "expo-sqlite",
       "expo-secure-store",
       "expo-web-browser",

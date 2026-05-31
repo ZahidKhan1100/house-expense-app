@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   ScrollView,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useKeyboardBottomPadding } from "../src/hooks/useKeyboardBottomPadding";
@@ -19,6 +20,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
+import { useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { WebView } from "react-native-webview";
 import jsQR from "jsqr";
@@ -35,12 +37,14 @@ import {
   extractHouseCodeFromQrPayload,
   peekPendingHouseCode,
 } from "@/src/utils/houseInviteLink";
+import { notifyStoredUserUpdated } from "@/src/auth/userSessionBridge";
 
 const { width, height } = Dimensions.get("window");
 const SCANNER_SIZE = width * 0.75;
 
 export default function ChooseHouse() {
   const router = useRouter();
+  const navigation = useNavigation();
   const keyboardScrollPad = useKeyboardBottomPadding(32);
   const webViewRef = useRef<WebView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -56,6 +60,39 @@ export default function ChooseHouse() {
       }
     })();
   }, []);
+
+  const returnToLogin = useCallback(async () => {
+    try {
+      await clearPendingHouseCode();
+      await AsyncStorage.multiRemove(["token", "user", "house"]);
+    } catch {
+      /* still navigate */
+    }
+    router.replace("/(auth)/login");
+  }, [router]);
+
+  const handleBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    Alert.alert(
+      "Leave setup?",
+      "Sign out and return to login. You can sign in again with Google, Apple, or email.",
+      [
+        { text: "Stay", style: "cancel" },
+        { text: "Sign out", style: "destructive", onPress: () => void returnToLogin() },
+      ],
+    );
+  }, [navigation, returnToLogin]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      handleBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleBack]);
 
   // Animations
   const scanLineAnim = useRef(new Animated.Value(0)).current;
@@ -113,6 +150,7 @@ export default function ChooseHouse() {
         user.role = data.user.role;
         user.status = data.user.status;
         await AsyncStorage.setItem("user", JSON.stringify(user));
+        notifyStoredUserUpdated();
         await AsyncStorage.setItem("house", JSON.stringify(data.house));
         router.replace("/(tabs)/dashboard");
       }
@@ -149,6 +187,7 @@ export default function ChooseHouse() {
             status: "admin",
           }),
         );
+        notifyStoredUserUpdated();
         router.replace("/(tabs)/dashboard");
       }
     } catch (err: any) {
@@ -179,6 +218,17 @@ export default function ChooseHouse() {
           colors={["#F8FAFC", "#E2E8F0"]}
           style={StyleSheet.absoluteFill}
         />
+        <SafeAreaView style={styles.permissionBackWrap}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={handleBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <BlurView intensity={20} style={styles.blurBack}>
+              <Ionicons name="chevron-back" size={24} color="#1E293B" />
+            </BlurView>
+          </TouchableOpacity>
+        </SafeAreaView>
         <View style={styles.permissionCard}>
           <Ionicons name="camera-outline" size={64} color="#FF6A6A" />
           <Text style={styles.permissionTitle}>Camera Access</Text>
@@ -217,7 +267,8 @@ export default function ChooseHouse() {
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backBtn}
-              onPress={() => router.back()}
+              onPress={handleBack}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <BlurView intensity={20} style={styles.blurBack}>
                 <Ionicons name="chevron-back" size={24} color="#1E293B" />
@@ -359,6 +410,18 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1, paddingBottom: 40 },
   safeArea: { flex: 1, paddingHorizontal: 24 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  permissionBackWrap: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 24,
+    zIndex: 10,
+  },
+  backBtn: {
+    width: 45,
+    height: 45,
+  },
 
   header: {
     flexDirection: "row",

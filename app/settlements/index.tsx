@@ -26,7 +26,8 @@ import { useFocusEffect } from "@react-navigation/native";
 
 import { useSettlementLock } from "../../src/context/SettlementLockContext";
 import { useTheme } from "../../src/theme/ThemeContext";
-import { apiClient } from "../../src/utils/apiClient";
+import { apiClient, getApiErrorMessage } from "../../src/utils/apiClient";
+import { useStoredUser } from "../../src/hooks/useStoredUser";
 
 const { width } = Dimensions.get("window");
 
@@ -77,6 +78,24 @@ export default function Settlements() {
   const [currency, setCurrency] = useState("$");
   const { burst, KarmaBurst } = useKarmaBurst();
   const { refreshSettlementLock } = useSettlementLock();
+
+  /** Logged-in user id; used to limit "Mark paid" to sender or receiver only. */
+  const storedUser = useStoredUser();
+  const meId = useMemo(() => {
+    const raw = storedUser?.id;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }, [storedUser]);
+
+  const canMarkPaid = useCallback(
+    (tx: any): boolean => {
+      if (meId == null) return false;
+      const fromId = Number(tx?.from_user_id);
+      const toId = Number(tx?.to_user_id);
+      return meId === fromId || meId === toId;
+    },
+    [meId],
+  );
 
   const colors = useMemo(
     () => ({
@@ -194,7 +213,7 @@ export default function Settlements() {
     if (pendingCount > 0) {
       Alert.alert(
         "Replace pending transfers?",
-        "This rebuilds pending rows from current expense balances. Completed (paid) transfers are not removed.",
+        "This recalculates from every bill in the month (cent-safe splits on each expense), then rebuilds pending transfers. Completed (paid) transfers are not removed.",
         [
           { text: "Cancel", style: "cancel" },
           { text: "Continue", onPress: () => void runGeneratePlan() },
@@ -361,7 +380,15 @@ export default function Settlements() {
     });
   };
 
-  const markPaid = async (id: number) => {
+  const markPaid = async (tx: any) => {
+    if (!canMarkPaid(tx)) {
+      Alert.alert(
+        "Not your settlement",
+        "Only the person paying or receiving can mark this transfer as paid.",
+      );
+      return;
+    }
+    const id = Number(tx?.id);
     setSettlements((prev) =>
       prev.map((s) =>
         s.id === id ? { ...s, status: "paid", settled_at: new Date() } : s,
@@ -373,6 +400,10 @@ export default function Settlements() {
       // Optimistic dopamine: show the reward burst (backend awards based on 12h rule)
       burst("+50 Karma");
     } catch (e) {
+      Alert.alert(
+        "Could not mark as paid",
+        getApiErrorMessage(e, "Please try again."),
+      );
       fetchData(false);
       console.log(e);
     }
@@ -556,6 +587,19 @@ export default function Settlements() {
           <Text style={styles.generatePlanBtnText}>Record stock buy-back</Text>
         </TouchableOpacity>
 
+        <Text
+          style={{
+            fontSize: 12,
+            color: colors.sub,
+            lineHeight: 17,
+            marginBottom: 8,
+            paddingHorizontal: 4,
+          }}
+        >
+          Leftover cents from all bills are applied here (not on the first person
+          per bill). Rebuild the plan after adding or editing expenses.
+        </Text>
+
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>
             Who pays whom
@@ -584,9 +628,9 @@ export default function Settlements() {
               No settlement rows yet
             </Text>
             <Text style={[styles.emptySub, { color: colors.sub }]}>
-              Expenses are tracked separately. Use “Build settlement plan” above
-              to create pending transfers from this month’s balances (or you may
-              be perfectly even).
+              Tap “Build settlement plan” to recalculate from every bill this
+              month (same cent-split rules as each expense). Paid transfers are
+              kept; pending rows are replaced.
             </Text>
           </View>
         ) : (
@@ -751,19 +795,47 @@ export default function Settlements() {
                         Paid
                       </Text>
                     </View>
-                  ) : (
+                  ) : canMarkPaid(tx) ? (
                     <TouchableOpacity
                       style={styles.markPaidBtn}
-                      onPress={() => markPaid(tx.id)}
+                      onPress={() => markPaid(tx)}
                       activeOpacity={0.85}
                     >
-                      <Text style={styles.markPaidBtnText}>Mark paid</Text>
+                      <Text style={styles.markPaidBtnText}>
+                        {meId != null && Number(tx.from_user_id) === meId
+                          ? "I paid this"
+                          : "I received this"}
+                      </Text>
                       <MaterialCommunityIcons
                         name="check"
                         size={18}
                         color="#fff"
                       />
                     </TouchableOpacity>
+                  ) : (
+                    <View
+                      style={[
+                        styles.paidPill,
+                        {
+                          backgroundColor: isDark
+                            ? "rgba(148,163,184,0.18)"
+                            : "rgba(148,163,184,0.18)",
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 999,
+                        },
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name="lock-outline"
+                        size={14}
+                        color={colors.sub}
+                      />
+                      <Text style={[styles.paidPillText, { color: colors.sub }]}>
+                        Waiting on{" "}
+                        {resolveName(tx, "from")} / {resolveName(tx, "to")}
+                      </Text>
+                    </View>
                   )}
                 </View>
               </View>

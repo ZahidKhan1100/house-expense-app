@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -26,6 +27,10 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useRouter } from "expo-router";
 
 import { useSettlementLock } from "../../../src/context/SettlementLockContext";
+import {
+  WALL_SNIPPET_PHOTO_RETENTION_DETAIL,
+  WALL_SNIPPET_PHOTO_RETENTION_SHORT,
+} from "../../../src/constants/wallSnippetRetention";
 import { useTheme } from "../../../src/theme/ThemeContext";
 import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
 import NetInfo from "@react-native-community/netinfo";
@@ -39,12 +44,16 @@ import {
 import { isLikelyUnreachableError } from "../../../src/offline/offlineUtils";
 import { apiClient, getApiErrorMessage } from "../../../src/utils/apiClient";
 import { extractReceiptFromImage } from "../../../src/services/receiptScanService";
+import { RECEIPT_IMAGE_MAX_DIMENSION } from "../../../src/constants/receiptImage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   bindChannelDebug,
   createPusherClient,
 } from "../../../src/realtime/realtimeClient";
 import { useKarmaBurst } from "../../../src/rewards/useKarmaBurst";
+import { useStoredUser } from "../../../src/hooks/useStoredUser";
+import { UserAvatar } from "../../../src/components/UserAvatar";
+import { profileAvatarUrl } from "../../../src/utils/profileAvatarUrl";
 
 const { width } = Dimensions.get("window");
 const CORAL = "#FF6A6A";
@@ -63,7 +72,7 @@ type WallPost = {
   my_hearted?: boolean;
   emoji_counts?: Record<string, number>;
   my_emojis?: string[];
-  user?: { id: number; name: string } | null;
+  user?: { id: number; name: string; avatar_url?: string | null } | null;
   created_at?: string | null;
   system_payload?: {
     kind?: string;
@@ -76,6 +85,7 @@ type WallPost = {
 type MatePresenceRow = {
   user_id: number;
   name: string;
+  avatar_url?: string | null;
   presence: "home" | "away";
   away_until: string | null;
   guest_plus: boolean;
@@ -89,6 +99,29 @@ function toInt(v: any): number | null {
 function getVoteCount(post: WallPost, optionId: number): number {
   const counts: any = post.counts || {};
   return Number(counts[String(optionId)] ?? counts[optionId] ?? 0);
+}
+
+function pollVoteTotal(p: WallPost): number {
+  const counts = p.counts;
+  if (!counts || typeof counts !== "object") return 0;
+  return Object.keys(counts).reduce((sum, k) => {
+    const n = Number((counts as Record<string, unknown>)[k]);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
+
+function wallPostAvatarUrl(
+  post: WallPost,
+  stored: Record<string, unknown> | null,
+): string | null {
+  const uid = post.user?.id != null ? Number(post.user.id) : NaN;
+  const sid = stored?.id != null ? Number(stored.id) : NaN;
+  if (Number.isFinite(uid) && Number.isFinite(sid) && uid === sid) {
+    const fromStored = profileAvatarUrl(stored);
+    if (fromStored) return fromStored;
+  }
+  const raw = post.user?.avatar_url;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
 
 function formatAwayUntil(iso: string | null | undefined): string {
@@ -105,6 +138,7 @@ function formatAwayUntil(iso: string | null | undefined): string {
 
 export default function Wall() {
   const router = useRouter();
+  const storedUser = useStoredUser();
   const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
@@ -143,7 +177,13 @@ export default function Wall() {
   const [savingStatus, setSavingStatus] = useState(false);
   const [me, setMe] = useState<{ id: number; role?: string } | null>(null);
   const [around, setAround] = useState<
-    { user_id: number; name: string; role?: string | null; status?: "home" | "out" | "away" | null }[]
+    {
+      user_id: number;
+      name: string;
+      avatar_url?: string | null;
+      role?: string | null;
+      status?: "home" | "out" | "away" | null;
+    }[]
   >([]);
 
   const [matePresence, setMatePresence] = useState<MatePresenceRow[]>([]);
@@ -161,6 +201,9 @@ export default function Wall() {
     }[]
   >([]);
   const [fulfillmentRequestId, setFulfillmentRequestId] = useState<number | null>(null);
+  /** When set, composer saves via PUT instead of POST. */
+  const [composerEditingPost, setComposerEditingPost] = useState<WallPost | null>(null);
+  const [clearSnippetImageOnSave, setClearSnippetImageOnSave] = useState(false);
   const [customLowInput, setCustomLowInput] = useState("");
 
   const colors = useMemo(
@@ -184,6 +227,17 @@ export default function Wall() {
     }),
     [isDark],
   );
+
+  useEffect(() => {
+    const id = toInt(storedUser?.id);
+    if (!id) {
+      setMe(null);
+      return;
+    }
+    const role =
+      typeof storedUser?.role === "string" ? storedUser.role : undefined;
+    setMe({ id, role });
+  }, [storedUser]);
 
   const cardElevation = useMemo(
     () =>
@@ -232,14 +286,53 @@ export default function Wall() {
     }
   }, []);
 
+  const trimUrl = useCallback((u: unknown) => {
+    if (typeof u !== "string") return null as string | null;
+    const t = u.trim();
+    return t ? t : null;
+  }, []);
+
   const fetchMatePresence = useCallback(async () => {
     try {
-      const res = await apiClient("/house/calendar/presence", "GET");
-      setMatePresence(Array.isArray(res?.mates) ? res.mates : []);
+      const [presRes, matesRes] = await Promise.all([
+        apiClient("/house/calendar/presence", "GET"),
+        apiClient("/mates", "GET").catch(() => null),
+      ]);
+
+      const rawMates = Array.isArray(presRes?.mates) ? presRes.mates : [];
+      const avatarById = new Map<number, string>();
+
+      const ingestAvatar = (id: unknown, url: unknown) => {
+        const uid = typeof id === "number" ? id : Number(id);
+        const av = trimUrl(url);
+        if (Number.isFinite(uid) && av) avatarById.set(uid, av);
+      };
+
+      const mr = matesRes as Record<string, unknown> | null;
+      const adminObj = mr?.admin as Record<string, unknown> | undefined;
+      if (adminObj?.id != null) ingestAvatar(adminObj.id, adminObj.avatar_url);
+      for (const m of Array.isArray(mr?.approved) ? (mr.approved as Record<string, unknown>[]) : []) {
+        ingestAvatar(m?.id, m?.avatar_url);
+      }
+      for (const m of Array.isArray(mr?.pending) ? (mr.pending as Record<string, unknown>[]) : []) {
+        ingestAvatar(m?.id, m?.avatar_url);
+      }
+
+      setMatePresence(
+        rawMates.map((row: MatePresenceRow) => {
+          const uid = Number(row.user_id);
+          const fromPresence = trimUrl(row.avatar_url);
+          const fallback = avatarById.get(uid);
+          return {
+            ...row,
+            avatar_url: fromPresence ?? fallback ?? row.avatar_url,
+          };
+        }),
+      );
     } catch {
       setMatePresence([]);
     }
-  }, []);
+  }, [trimUrl]);
 
   const fetchMeta = useCallback(async () => {
     try {
@@ -289,18 +382,8 @@ export default function Wall() {
     fetchFeed(true);
     fetchMeta();
     void fetchRunningLow();
-    void fetchMatePresence();
+    void     fetchMatePresence();
     void refreshRunningLowQueueCount();
-
-    (async () => {
-      try {
-        const userStr = await AsyncStorage.getItem("user");
-        const u = userStr ? JSON.parse(userStr) : null;
-        const id = toInt(u?.id);
-        if (!id) return;
-        setMe({ id, role: u?.role });
-      } catch {}
-    })();
   }, [
     fetchFeed,
     fetchMeta,
@@ -509,29 +592,60 @@ export default function Wall() {
     [fetchFeed],
   );
 
-  const openComposer = useCallback((mode: "snippet" | "poll") => {
-    setComposerMode(mode);
+  const resetComposerState = useCallback(() => {
     setCaption("");
     setLocalImageUri(null);
     setPollQuestion("");
     setPollOptions(["", ""]);
     setFulfillmentRequestId(null);
     setFulfillmentPrefill(null);
-    setComposerOpen(true);
+    setComposerEditingPost(null);
+    setClearSnippetImageOnSave(false);
   }, []);
+
+  const openComposer = useCallback(
+    (mode: "snippet" | "poll") => {
+      resetComposerState();
+      setComposerMode(mode);
+      setComposerOpen(true);
+    },
+    [resetComposerState],
+  );
 
   const openGroceryHeroComposer = useCallback(
     (req: { id: number; label: string; emoji: string }) => {
+      resetComposerState();
       setComposerMode("snippet");
-      setPollQuestion("");
-      setPollOptions(["", ""]);
       setCaption(`Picked up ${req.label}! ${req.emoji}`);
-      setLocalImageUri(null);
       setFulfillmentRequestId(req.id);
       setFulfillmentPrefill(req);
       setComposerOpen(true);
     },
-    [],
+    [resetComposerState],
+  );
+
+  const openEditPost = useCallback(
+    (p: WallPost) => {
+      resetComposerState();
+      setComposerEditingPost(p);
+      setFulfillmentRequestId(null);
+      setFulfillmentPrefill(null);
+
+      if (p.type === "snippet") {
+        setComposerMode("snippet");
+        setCaption((p.caption ?? "").slice(0, 100));
+        setLocalImageUri(null);
+      } else if (p.type === "poll") {
+        setComposerMode("poll");
+        setPollQuestion(p.poll_question ?? "");
+        const opts = (p.poll_options ?? []).map((o) => o.text);
+        setPollOptions(opts.length >= 2 ? [...opts] : ["", ""]);
+      } else {
+        return;
+      }
+      setComposerOpen(true);
+    },
+    [resetComposerState],
   );
 
   const pingRunningLowPreset = useCallback(
@@ -657,7 +771,10 @@ export default function Wall() {
       });
       if (result.canceled) return;
       const uri = result.assets?.[0]?.uri;
-      if (uri) setLocalImageUri(uri);
+      if (uri) {
+        setClearSnippetImageOnSave(false);
+        setLocalImageUri(uri);
+      }
       return;
     }
 
@@ -674,13 +791,16 @@ export default function Wall() {
     });
     if (result.canceled) return;
     const uri = result.assets?.[0]?.uri;
-    if (uri) setLocalImageUri(uri);
+    if (uri) {
+      setClearSnippetImageOnSave(false);
+      setLocalImageUri(uri);
+    }
   }, []);
 
   const uploadToCloudinary = useCallback(async (uri: string) => {
     const manipulated = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1280 } }],
+      [{ resize: { width: RECEIPT_IMAGE_MAX_DIMENSION } }],
       { compress: 0.78, format: ImageManipulator.SaveFormat.JPEG },
     );
 
@@ -722,33 +842,74 @@ export default function Wall() {
   }, []);
 
   const createSnippet = useCallback(async () => {
-    if (!localImageUri) {
-      Alert.alert("Add a photo", "Pick an image to post a snippet.");
-      return;
-    }
+    const capTrim = caption.trim();
+
+    const keepingServerImage =
+      composerEditingPost?.type === "snippet" &&
+      !!(composerEditingPost.image_url && String(composerEditingPost.image_url).trim()) &&
+      !clearSnippetImageOnSave;
+
     if (caption.length > 100) {
       Alert.alert("Too long", "Caption must be 100 characters or less.");
       return;
     }
+
+    if (!localImageUri && !capTrim && !keepingServerImage) {
+      Alert.alert("Add something", "Write a caption and/or attach a photo for this snippet.");
+      return;
+    }
+
+    const editingSnippet = composerEditingPost?.type === "snippet" ? composerEditingPost : null;
+    const isEdit = !!editingSnippet;
+
     setCreating(true);
     try {
+      if (isEdit && editingSnippet) {
+        let uploaded: { url: string; publicId: string | null } | null = null;
+        if (localImageUri) {
+          uploaded = await uploadToCloudinary(localImageUri);
+        }
+        const putBody: Record<string, unknown> = {
+          caption: capTrim || null,
+          ...(uploaded
+            ? { image_url: uploaded.url, image_public_id: uploaded.publicId }
+            : {}),
+          ...(clearSnippetImageOnSave && !localImageUri ? { clear_image: true } : {}),
+        };
+        await apiClient(`/house-wall/snippets/${editingSnippet.id}`, "PUT", putBody);
+        resetComposerState();
+        setComposerOpen(false);
+        await fetchFeed(false);
+        return;
+      }
+
       const restockReq = fulfillmentPrefill;
       const restockImageUri = localImageUri;
-      const uploaded = await uploadToCloudinary(localImageUri);
+      let uploaded: { url: string; publicId: string | null } | null = null;
+      if (localImageUri) {
+        uploaded = await uploadToCloudinary(localImageUri);
+      }
       const body: Record<string, unknown> = {
-        caption: caption.trim() || null,
-        image_url: uploaded.url,
-        image_public_id: uploaded.publicId,
+        caption: capTrim || null,
+        ...(uploaded
+          ? { image_url: uploaded.url, image_public_id: uploaded.publicId }
+          : {}),
       };
       if (fulfillmentRequestId != null) {
         body.running_low_request_id = fulfillmentRequestId;
       }
       const res = await apiClient("/house-wall/snippets", "POST", body);
+      const snippetPostId =
+        typeof (res?.post as { id?: number } | undefined)?.id === "number"
+          ? (res.post as { id: number }).id
+          : null;
+      const cloudinaryPidForDiscard = uploaded?.publicId ?? null;
       if (res?.post) setPosts((prev) => [res.post as WallPost, ...prev]);
       const pts = Number(res?.karma_points ?? 10);
       burst(`+${pts} Karma`);
       setFulfillmentRequestId(null);
       setFulfillmentPrefill(null);
+      resetComposerState();
       setComposerOpen(false);
       void fetchRunningLow();
 
@@ -778,6 +939,27 @@ export default function Wall() {
                   void (async () => {
                     try {
                       const ex = await extractReceiptFromImage(restockImageUri);
+                      if (
+                        snippetPostId != null &&
+                        cloudinaryPidForDiscard &&
+                        restockReq
+                      ) {
+                        try {
+                          await apiClient("/house-wall/snippets/discard-upload", "POST", {
+                            post_id: snippetPostId,
+                            cloudinary_public_id: cloudinaryPidForDiscard,
+                          });
+                          setPosts((prev) =>
+                            prev.map((p) =>
+                              p.id === snippetPostId
+                                ? { ...p, image_url: null }
+                                : p,
+                            ),
+                          );
+                        } catch {
+                          /* keep Cloudinary thumbnail if unlink fails offline */
+                        }
+                      }
                       router.push({
                         pathname: "/expenses/addExpense" as any,
                         params: {
@@ -825,33 +1007,61 @@ export default function Wall() {
     uploadToCloudinary,
     fulfillmentRequestId,
     fulfillmentPrefill,
+    composerEditingPost,
+    clearSnippetImageOnSave,
     burst,
     fetchRunningLow,
+    fetchFeed,
+    resetComposerState,
     router,
+    setPosts,
   ]);
 
   const createPoll = useCallback(async () => {
     const q = pollQuestion.trim();
     const opts = pollOptions.map((o) => o.trim()).filter(Boolean);
+    const editingPoll = composerEditingPost?.type === "poll" ? composerEditingPost : null;
+    const locked = editingPoll ? pollVoteTotal(editingPoll) > 0 : false;
+
     if (!q) return Alert.alert("Question required", "Write a poll question.");
-    if (opts.length < 2) return Alert.alert("Add options", "Add at least 2 options.");
-    if (opts.length > 4) return Alert.alert("Too many", "Max 4 options.");
+    if (!locked) {
+      if (opts.length < 2) return Alert.alert("Add options", "Add at least 2 options.");
+      if (opts.length > 4) return Alert.alert("Too many", "Max 4 options.");
+    }
 
     setCreating(true);
     try {
+      if (editingPoll) {
+        if (locked) {
+          await apiClient(`/house-wall/polls/${editingPoll.id}`, "PUT", {
+            question: q,
+          });
+        } else {
+          await apiClient(`/house-wall/polls/${editingPoll.id}`, "PUT", {
+            question: q,
+            options: opts,
+          });
+        }
+        resetComposerState();
+        setComposerOpen(false);
+        await fetchFeed(false);
+        return;
+      }
+
       const res = await apiClient("/house-wall/polls", "POST", {
         question: q,
         options: opts,
       });
       if (res?.post) setPosts((prev) => [res.post as WallPost, ...prev]);
       burst("+10 Karma");
+      resetComposerState();
       setComposerOpen(false);
     } catch (e: any) {
       Alert.alert("Couldn’t post poll", e?.message ?? "Try again");
     } finally {
       setCreating(false);
     }
-  }, [pollOptions, pollQuestion]);
+  }, [composerEditingPost, burst, pollOptions, pollQuestion, resetComposerState, fetchFeed]);
 
   const onDoubleTap = useCallback(
     (postId: number) => {
@@ -1000,6 +1210,25 @@ export default function Wall() {
     [fetchFeed],
   );
 
+  let composerSnippetPreviewUri =
+    typeof localImageUri === "string" && localImageUri.trim() ? localImageUri.trim() : "";
+  if (
+    !composerSnippetPreviewUri &&
+    composerEditingPost?.type === "snippet" &&
+    !clearSnippetImageOnSave &&
+    typeof composerEditingPost.image_url === "string"
+  ) {
+    const u = composerEditingPost.image_url.trim();
+    composerSnippetPreviewUri = u ? u : "";
+  }
+  const composerSnippetCanSubmit =
+    composerSnippetPreviewUri !== "" || caption.trim().length > 0;
+
+  const composerPollEditing = composerEditingPost?.type === "poll" ? composerEditingPost : null;
+  const composerPollOptionsLocked = !!(
+    composerPollEditing && pollVoteTotal(composerPollEditing) > 0
+  );
+
   if (loading && !refreshing) {
     return (
       <View style={[styles.loader, { backgroundColor: colors.bg }]}>
@@ -1040,6 +1269,9 @@ export default function Wall() {
             <Text style={[styles.pageSub, { color: colors.sub }]}>
               Notes, essentials, and what everyone’s up to
             </Text>
+            <Text style={[styles.pageRetention, { color: colors.muted }]}>
+              {WALL_SNIPPET_PHOTO_RETENTION_SHORT}
+            </Text>
           </View>
           <TouchableOpacity
             style={styles.heroCta}
@@ -1072,13 +1304,16 @@ export default function Wall() {
                   : m.guest_plus
                     ? "Home · +1 guest"
                     : "Home (Active)";
+                const fromApi =
+                  typeof m.avatar_url === "string" ? m.avatar_url.trim() : "";
+                const isMe =
+                  storedUser?.id != null &&
+                  Number(storedUser.id) === Number(m.user_id);
+                const presenceAvatarUri =
+                  fromApi ||
+                  (isMe ? profileAvatarUrl(storedUser) : null);
                 return (
-                  <TouchableOpacity
-                    key={m.user_id}
-                    style={styles.presenceItem}
-                    activeOpacity={0.88}
-                    onPress={() => router.push("/whos-home")}
-                  >
+                  <View key={m.user_id} style={styles.presenceItem}>
                     <View
                       style={[
                         styles.presenceAvatarRing,
@@ -1089,40 +1324,36 @@ export default function Wall() {
                         },
                       ]}
                     >
-                      <View
-                        style={[
-                          styles.presenceAvatarInner,
-                          { backgroundColor: away ? "#94A3B8" : CORAL + "22" },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.presenceAvatarLetter,
-                            { color: away ? "#F8FAFC" : CORAL, opacity: away ? 0.85 : 1 },
-                          ]}
-                        >
-                          {m.name?.charAt(0).toUpperCase() ?? "?"}
-                        </Text>
-                      </View>
+                      <UserAvatar
+                        name={m.name ?? "?"}
+                        avatarUrl={presenceAvatarUri || null}
+                        size={54}
+                        borderRadius={18}
+                        bg={away ? "#94A3B8" : CORAL + "22"}
+                        letterColor={away ? "#F8FAFC" : CORAL}
+                        onPress={() => router.push(`/mate/${m.user_id}` as any)}
+                      />
                       {away ? (
-                        <View style={styles.presencePlaneTag}>
+                        <View style={styles.presencePlaneTag} pointerEvents="none">
                           <Text style={{ fontSize: 11 }}>✈️</Text>
                         </View>
                       ) : m.guest_plus ? (
-                        <View style={styles.presenceGuestBadge}>
+                        <View style={styles.presenceGuestBadge} pointerEvents="none">
                           <Text style={styles.presenceGuestBadgeText}>+1</Text>
                         </View>
                       ) : (
-                        <View style={styles.presenceHomeDot} />
+                        <View style={styles.presenceHomeDot} pointerEvents="none" />
                       )}
                     </View>
-                    <Text style={[styles.presenceName, { color: colors.text }]} numberOfLines={1}>
-                      {m.name}
-                    </Text>
-                    <Text style={[styles.presenceSub, { color: colors.sub }]} numberOfLines={2}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
+                    <Pressable onPress={() => router.push("/whos-home")} style={{ alignItems: "center" }}>
+                      <Text style={[styles.presenceName, { color: colors.text }]} numberOfLines={1}>
+                        {m.name}
+                      </Text>
+                      <Text style={[styles.presenceSub, { color: colors.sub }]} numberOfLines={2}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  </View>
                 );
               })}
             </ScrollView>
@@ -1211,10 +1442,20 @@ export default function Wall() {
 
             {around.length > 0 ? (
               <View style={{ marginTop: 12, gap: 8 }}>
-                {around.map((r) => {
+                {around.map((r: any) => {
                   const st = r.status;
                   const chip =
                     st === "home" ? "🏠 Home" : st === "out" ? "🏃 Out" : st === "away" ? "✈️ Away" : "—";
+                  const fromStatuses =
+                    typeof r.avatar_url === "string" ? r.avatar_url.trim() : "";
+                  const uidAround = Number(r.user_id);
+                  const isMeAround =
+                    storedUser?.id != null && Number(storedUser.id) === uidAround;
+                  let aroundAvatarUri: string | null =
+                    fromStatuses || null;
+                  if (!aroundAvatarUri && isMeAround && storedUser) {
+                    aroundAvatarUri = profileAvatarUrl(storedUser);
+                  }
                   return (
                     <View
                       key={r.user_id}
@@ -1232,10 +1473,30 @@ export default function Wall() {
                         },
                       ]}
                     >
-                      <Text style={{ color: colors.text, fontWeight: "900" }}>
-                        {r.name || "Mate"}
-                        {r.role === "admin" ? " (Admin)" : ""}
-                      </Text>
+                      <View
+                        style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}
+                      >
+                        <UserAvatar
+                          name={r.name || "Mate"}
+                          avatarUrl={aroundAvatarUri}
+                          size={34}
+                          borderRadius={13}
+                          bg={
+                            isDark
+                              ? "rgba(255,255,255,0.06)"
+                              : "rgba(15,23,42,0.06)"
+                          }
+                          letterColor={colors.text}
+                          onPress={() => router.push(`/mate/${uidAround}` as any)}
+                        />
+                        <Text
+                          style={{ color: colors.text, fontWeight: "900", flex: 1 }}
+                          numberOfLines={1}
+                        >
+                          {r.name || "Mate"}
+                          {r.role === "admin" ? " (Admin)" : ""}
+                        </Text>
+                      </View>
                       <Text style={{ color: colors.sub, fontWeight: "900" }}>{chip}</Text>
                     </View>
                   );
@@ -1378,7 +1639,8 @@ export default function Wall() {
             </View>
             <Text style={[styles.emptyTitle, { color: colors.text }]}>Nothing here yet</Text>
             <Text style={[styles.emptySub, { color: colors.sub }]}>
-              Tap + to share a photo or start a poll — your house sees it instantly.
+              Tap + to share a photo or start a poll — your house sees it instantly.{" "}
+              {WALL_SNIPPET_PHOTO_RETENTION_SHORT}
             </Text>
           </View>
         ) : (
@@ -1425,11 +1687,20 @@ export default function Wall() {
                           />
                         </View>
                       ) : (
-                        <View style={styles.avatar}>
-                          <Text style={styles.avatarText}>
-                            {author.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
+                        <UserAvatar
+                          name={author}
+                          avatarUrl={wallPostAvatarUrl(p, storedUser)}
+                          size={36}
+                          borderRadius={14}
+                          bg="rgba(255,106,106,0.22)"
+                          letterColor="#fff"
+                          onPress={
+                            p.user?.id != null
+                              ? () =>
+                                  router.push(`/mate/${Number(p.user!.id)}` as any)
+                              : undefined
+                          }
+                        />
                       )}
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.author, { color: colors.text }]}>
@@ -1443,12 +1714,27 @@ export default function Wall() {
                                 : "Vacation alert"
                               : "Milestone"
                             : isSnippet
-                              ? "Photo"
+                              ? p.image_url
+                                ? "Snippet"
+                                : "Note"
                               : isPoll
                                 ? "Poll"
                                 : "Update"}
                         </Text>
                       </View>
+                      {(isSnippet || isPoll) && canDelete(p) && (
+                        <TouchableOpacity
+                          onPress={() => openEditPost(p)}
+                          activeOpacity={0.85}
+                          style={[styles.moreBtn, { backgroundColor: colors.inputBg }]}
+                        >
+                          <MaterialCommunityIcons
+                            name="pencil-outline"
+                            size={20}
+                            color={colors.onCardMuted}
+                          />
+                        </TouchableOpacity>
+                      )}
                       {canDelete(p) && (
                         <TouchableOpacity
                           onPress={() => deletePost(p)}
@@ -1519,9 +1805,31 @@ export default function Wall() {
                     )}
 
                     {!!p.caption && !isSystem && (
-                      <Text style={[styles.caption, { color: colors.text }]}>
-                        {p.caption}
-                      </Text>
+                      isSnippet && !p.image_url ? (
+                        <TouchableOpacity
+                          activeOpacity={0.92}
+                          onPress={() => onDoubleTap(p.id)}
+                          style={{ marginTop: 2 }}
+                        >
+                          <Text style={[styles.caption, { color: colors.text }]}>
+                            {p.caption}
+                          </Text>
+                          <View style={[styles.snippetHintRowCaption, { marginTop: 6 }]}>
+                            <MaterialCommunityIcons
+                              name="gesture-double-tap"
+                              size={14}
+                              color={colors.sub}
+                            />
+                            <Text style={[styles.snippetHintTextMuted, { color: colors.sub }]}>
+                              Double-tap to heart
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      ) : (
+                        <Text style={[styles.caption, { color: colors.text }]}>
+                          {p.caption}
+                        </Text>
+                      )
                     )}
 
                     {isPoll && (
@@ -1604,46 +1912,48 @@ export default function Wall() {
                             <Text style={styles.snippetHintText}>Double-tap to heart</Text>
                           </View>
                         </TouchableOpacity>
+                      </View>
+                    ) : null}
 
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.reactionRow}
-                        >
-                          {REACTION_EMOJIS.map((e) => {
-                            const mine = (p.my_emojis ?? []).includes(e);
-                            const c = Number((p.emoji_counts ?? {})[e] ?? 0);
-                            return (
-                              <TouchableOpacity
-                                key={e}
-                                onPress={() => toggleEmoji(p.id, e)}
-                                activeOpacity={0.85}
+                    {isSnippet ? (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={[styles.reactionRow, { marginTop: isSnippet && p.image_url ? 10 : 12 }]}
+                      >
+                        {REACTION_EMOJIS.map((e) => {
+                          const mine = (p.my_emojis ?? []).includes(e);
+                          const c = Number((p.emoji_counts ?? {})[e] ?? 0);
+                          return (
+                            <TouchableOpacity
+                              key={e}
+                              onPress={() => toggleEmoji(p.id, e)}
+                              activeOpacity={0.85}
+                              style={[
+                                styles.reactionPill,
+                                {
+                                  borderColor: mine
+                                    ? "rgba(255,106,106,0.65)"
+                                    : colors.inputBorder,
+                                  backgroundColor: mine
+                                    ? "rgba(255,106,106,0.18)"
+                                    : colors.inputBg,
+                                },
+                              ]}
+                            >
+                              <Text style={styles.reactionEmoji}>{e}</Text>
+                              <Text
                                 style={[
-                                  styles.reactionPill,
-                                  {
-                                    borderColor: mine
-                                      ? "rgba(255,106,106,0.65)"
-                                      : colors.inputBorder,
-                                    backgroundColor: mine
-                                      ? "rgba(255,106,106,0.18)"
-                                      : colors.inputBg,
-                                  },
+                                  styles.reactionCount,
+                                  { color: mine ? CORAL : colors.sub },
                                 ]}
                               >
-                                <Text style={styles.reactionEmoji}>{e}</Text>
-                                <Text
-                                  style={[
-                                    styles.reactionCount,
-                                    { color: mine ? CORAL : colors.sub },
-                                  ]}
-                                >
-                                  {c}
-                                </Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
+                                {c}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
                     ) : null}
                   </View>
                 </View>
@@ -1657,7 +1967,10 @@ export default function Wall() {
         visible={composerOpen}
         animationType="slide"
         transparent
-        onRequestClose={() => setComposerOpen(false)}
+        onRequestClose={() => {
+          setComposerOpen(false);
+          resetComposerState();
+        }}
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
@@ -1675,51 +1988,61 @@ export default function Wall() {
               ]}
             >
             <View style={styles.modalTop}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Create</Text>
-              <TouchableOpacity onPress={() => setComposerOpen(false)} hitSlop={10}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                {composerEditingPost ? "Edit post" : "Create"}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setComposerOpen(false);
+                  resetComposerState();
+                }}
+                hitSlop={10}
+              >
                 <MaterialCommunityIcons name="close" size={22} color={colors.sub} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                style={[
-                  styles.modePill,
-                  composerMode === "snippet" && styles.modePillActive,
-                ]}
-                onPress={() => setComposerMode("snippet")}
-              >
-                <Text
+            {!composerEditingPost ? (
+              <View style={styles.modeRow}>
+                <TouchableOpacity
                   style={[
-                    styles.modeText,
-                    { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
-                    composerMode === "snippet" && styles.modeTextActive,
+                    styles.modePill,
+                    composerMode === "snippet" && styles.modePillActive,
                   ]}
+                  onPress={() => setComposerMode("snippet")}
                 >
-                  Snippet
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modePill,
-                  composerMode === "poll" && styles.modePillActive,
-                ]}
-                onPress={() => {
-                  setComposerMode("poll");
-                  setFulfillmentRequestId(null);
-                }}
-              >
-                <Text
+                  <Text
+                    style={[
+                      styles.modeText,
+                      { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
+                      composerMode === "snippet" && styles.modeTextActive,
+                    ]}
+                  >
+                    Snippet
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   style={[
-                    styles.modeText,
-                    { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
-                    composerMode === "poll" && styles.modeTextActive,
+                    styles.modePill,
+                    composerMode === "poll" && styles.modePillActive,
                   ]}
+                  onPress={() => {
+                    setComposerMode("poll");
+                    setFulfillmentRequestId(null);
+                  }}
                 >
-                  Quick Poll
-                </Text>
-              </TouchableOpacity>
-            </View>
+                  <Text
+                    style={[
+                      styles.modeText,
+                      { color: isDark ? "rgba(255,255,255,0.85)" : "#0F172A" },
+                      composerMode === "poll" && styles.modeTextActive,
+                    ]}
+                  >
+                    Quick Poll
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
             <ScrollView
               keyboardShouldPersistTaps="handled"
@@ -1738,11 +2061,43 @@ export default function Wall() {
                 ) : null}
                 <TouchableOpacity style={styles.pickBtn} onPress={pickImage} activeOpacity={0.9}>
                   <MaterialCommunityIcons name="image" size={18} color="#fff" />
-                  <Text style={styles.pickBtnText}>{localImageUri ? "Change photo" : "Pick a photo"}</Text>
+                  <Text style={styles.pickBtnText}>
+                    {fulfillmentRequestId != null && !composerEditingPost
+                      ? localImageUri
+                        ? "Change receipt photo"
+                        : "Pick receipt photo (recommended)"
+                      : localImageUri
+                        ? "Change photo"
+                        : "Pick a photo (optional)"}
+                  </Text>
                 </TouchableOpacity>
 
-                {!!localImageUri && (
-                  <Image source={{ uri: localImageUri }} style={styles.preview} />
+                {!!composerSnippetPreviewUri && (
+                  <Image
+                    source={{ uri: composerSnippetPreviewUri }}
+                    style={styles.preview}
+                  />
+                )}
+
+                {composerEditingPost?.type === "snippet" && !!composerSnippetPreviewUri && (
+                  <TouchableOpacity
+                    style={[
+                      styles.secondaryBtn,
+                      { alignSelf: "flex-start", borderColor: "rgba(239,68,68,0.45)" },
+                    ]}
+                    onPress={() => {
+                      setLocalImageUri(null);
+                      if (composerEditingPost?.image_url) {
+                        setClearSnippetImageOnSave(true);
+                      } else {
+                        setClearSnippetImageOnSave(false);
+                      }
+                    }}
+                    activeOpacity={0.9}
+                  >
+                    <MaterialCommunityIcons name="image-off-outline" size={16} color="#fff" />
+                    <Text style={styles.secondaryBtnText}>Remove photo</Text>
+                  </TouchableOpacity>
                 )}
 
                 <View style={styles.inputWrap}>
@@ -1752,7 +2107,9 @@ export default function Wall() {
                       { color: isDark ? "rgba(255,255,255,0.8)" : "#0F172A" },
                     ]}
                   >
-                    Caption (optional, max 100)
+                    {composerSnippetPreviewUri
+                      ? "Caption (optional, max 100)"
+                      : "Caption (required unless you add a photo, max 100)"}
                   </Text>
                   <TextInput
                     value={caption}
@@ -1776,6 +2133,25 @@ export default function Wall() {
                     ]}
                   >
                     {caption.length}/100
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.retentionNote,
+                    {
+                      borderColor: colors.hairline,
+                      backgroundColor: isDark ? "rgba(46,196,182,0.08)" : "rgba(46,196,182,0.1)",
+                    },
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name="clock-outline"
+                    size={16}
+                    color="#2EC4B6"
+                  />
+                  <Text style={[styles.retentionNoteText, { color: colors.sub }]}>
+                    {WALL_SNIPPET_PHOTO_RETENTION_DETAIL}
                   </Text>
                 </View>
 
@@ -1809,9 +2185,12 @@ export default function Wall() {
                 </ScrollView>
 
                 <TouchableOpacity
-                  style={[styles.postBtn, creating && { opacity: 0.7 }]}
+                  style={[
+                    styles.postBtn,
+                    (creating || !composerSnippetCanSubmit) && { opacity: 0.45 },
+                  ]}
                   onPress={createSnippet}
-                  disabled={creating}
+                  disabled={creating || !composerSnippetCanSubmit}
                   activeOpacity={0.9}
                 >
                   {creating ? (
@@ -1819,112 +2198,132 @@ export default function Wall() {
                   ) : (
                     <>
                       <MaterialCommunityIcons name="send" size={18} color="#fff" />
-                      <Text style={styles.postBtnText}>Post Snippet</Text>
+                      <Text style={styles.postBtnText}>
+                        {composerEditingPost?.type === "snippet"
+                          ? "Save snippet"
+                          : "Post snippet"}
+                      </Text>
                     </>
                   )}
                 </TouchableOpacity>
                 </View>
               ) : (
                 <View style={{ gap: 12 }}>
-                <Text style={{ color: colors.sub, fontWeight: "800" }}>
-                  Question + 2–4 options
-                </Text>
-                <View style={styles.inputWrap}>
-                  <Text
-                    style={[
-                      styles.inputLabel,
-                      { color: isDark ? "rgba(255,255,255,0.8)" : "#0F172A" },
-                    ]}
-                  >
-                    Question
-                  </Text>
-                  <TextInput
-                    value={pollQuestion}
-                    onChangeText={setPollQuestion}
-                    placeholder="Takeaway tonight?"
-                    placeholderTextColor={colors.inputPlaceholder}
-                    style={[
-                      styles.input,
-                      {
-                        borderColor: colors.inputBorder,
-                        backgroundColor: colors.inputBg,
-                        color: colors.inputText,
-                      },
-                    ]}
-                  />
-                </View>
+                  {composerPollOptionsLocked ? (
+                    <View style={styles.pollEditLockedBanner}>
+                      <MaterialCommunityIcons name="vote-outline" size={20} color={CORAL} />
+                      <Text style={[styles.pollEditLockedText, { color: colors.text }]}>
+                        Votes are in — you can change the question, not the choices.
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ color: colors.sub, fontWeight: "800" }}>
+                      Question + 2–4 options
+                    </Text>
+                  )}
+                  <View style={styles.inputWrap}>
+                    <Text
+                      style={[
+                        styles.inputLabel,
+                        { color: isDark ? "rgba(255,255,255,0.8)" : "#0F172A" },
+                      ]}
+                    >
+                      Question
+                    </Text>
+                    <TextInput
+                      value={pollQuestion}
+                      onChangeText={setPollQuestion}
+                      placeholder="Takeaway tonight?"
+                      placeholderTextColor={colors.inputPlaceholder}
+                      style={[
+                        styles.input,
+                        {
+                          borderColor: colors.inputBorder,
+                          backgroundColor: colors.inputBg,
+                          color: colors.inputText,
+                        },
+                      ]}
+                    />
+                  </View>
 
-                <View style={{ gap: 10 }}>
-                  {pollOptions.map((opt, idx) => (
-                    <View key={idx} style={styles.optRow}>
-                      <TextInput
-                        value={opt}
-                        onChangeText={(t) =>
-                          setPollOptions((prev) =>
-                            prev.map((p, i) => (i === idx ? t : p)),
-                          )
-                        }
-                        placeholder={`Option ${idx + 1}`}
-                        placeholderTextColor={colors.inputPlaceholder}
-                        style={[
-                          styles.input,
-                          {
-                            flex: 1,
-                            borderColor: colors.inputBorder,
-                            backgroundColor: colors.inputBg,
-                            color: colors.inputText,
-                          },
-                        ]}
-                      />
+                  <View style={{ gap: 10 }}>
+                    {pollOptions.map((opt, idx) => (
+                      <View key={idx} style={styles.optRow}>
+                        <TextInput
+                          value={opt}
+                          onChangeText={(t) =>
+                            setPollOptions((prev) =>
+                              prev.map((p, i) => (i === idx ? t : p)),
+                            )
+                          }
+                          placeholder={`Option ${idx + 1}`}
+                          placeholderTextColor={colors.inputPlaceholder}
+                          editable={!composerPollOptionsLocked}
+                          style={[
+                            styles.input,
+                            {
+                              flex: 1,
+                              borderColor: colors.inputBorder,
+                              backgroundColor: colors.inputBg,
+                              color: colors.inputText,
+                              opacity: composerPollOptionsLocked ? 0.75 : 1,
+                            },
+                          ]}
+                        />
+                        <TouchableOpacity
+                          onPress={() =>
+                            setPollOptions((prev) =>
+                              prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx),
+                            )
+                          }
+                          disabled={composerPollOptionsLocked || pollOptions.length <= 2}
+                          style={[
+                            styles.optDel,
+                            (composerPollOptionsLocked || pollOptions.length <= 2) && {
+                              opacity: 0.35,
+                            },
+                          ]}
+                        >
+                          <MaterialCommunityIcons name="close" size={18} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+
+                  {!composerPollOptionsLocked ? (
+                    <View style={styles.optActions}>
                       <TouchableOpacity
                         onPress={() =>
-                          setPollOptions((prev) =>
-                            prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx),
-                          )
+                          setPollOptions((prev) => (prev.length >= 4 ? prev : [...prev, ""]))
                         }
-                        disabled={pollOptions.length <= 2}
-                        style={[
-                          styles.optDel,
-                          pollOptions.length <= 2 && { opacity: 0.35 },
-                        ]}
+                        style={[styles.secondaryBtn, pollOptions.length >= 4 && { opacity: 0.5 }]}
+                        disabled={pollOptions.length >= 4}
                       >
-                        <MaterialCommunityIcons name="close" size={18} color="#fff" />
+                        <MaterialCommunityIcons name="plus" size={16} color="#fff" />
+                        <Text style={styles.secondaryBtnText}>Add option</Text>
                       </TouchableOpacity>
                     </View>
-                  ))}
-                </View>
+                  ) : null}
 
-                <View style={styles.optActions}>
                   <TouchableOpacity
-                    onPress={() =>
-                      setPollOptions((prev) => (prev.length >= 4 ? prev : [...prev, ""]))
-                    }
-                    style={[
-                      styles.secondaryBtn,
-                      pollOptions.length >= 4 && { opacity: 0.5 },
-                    ]}
-                    disabled={pollOptions.length >= 4}
+                    style={[styles.postBtn, creating && { opacity: 0.7 }]}
+                    onPress={createPoll}
+                    disabled={creating}
+                    activeOpacity={0.9}
                   >
-                    <MaterialCommunityIcons name="plus" size={16} color="#fff" />
-                    <Text style={styles.secondaryBtnText}>Add option</Text>
+                    {creating ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <MaterialCommunityIcons name="send" size={18} color="#fff" />
+                        <Text style={styles.postBtnText}>
+                          {composerEditingPost?.type === "poll"
+                            ? "Save poll"
+                            : "Post poll"}
+                        </Text>
+                      </>
+                    )}
                   </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.postBtn, creating && { opacity: 0.7 }]}
-                  onPress={createPoll}
-                  disabled={creating}
-                  activeOpacity={0.9}
-                >
-                  {creating ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <MaterialCommunityIcons name="send" size={18} color="#fff" />
-                      <Text style={styles.postBtnText}>Post Poll</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
                 </View>
               )}
             </ScrollView>
@@ -2000,6 +2399,7 @@ const styles = StyleSheet.create({
   },
   presenceItem: { width: 88, alignItems: "center" },
   presenceAvatarRing: {
+    position: "relative",
     width: 64,
     height: 64,
     borderRadius: 22,
@@ -2008,14 +2408,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 8,
   },
-  presenceAvatarInner: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  presenceAvatarLetter: { fontSize: 22, fontWeight: "900" },
   presencePlaneTag: {
     position: "absolute",
     bottom: -2,
@@ -2183,6 +2575,17 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,106,106,0.35)",
   },
   heroBannerText: { flex: 1, fontWeight: "800", fontSize: 13 },
+  pollEditLockedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(148,163,184,0.16)",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.35)",
+  },
+  pollEditLockedText: { flex: 1, fontWeight: "800", fontSize: 13, lineHeight: 18 },
   pinTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   pinInput: {
     borderRadius: 14,
@@ -2279,6 +2682,32 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.35)",
   },
   snippetHintText: { color: "rgba(255,255,255,0.9)", fontWeight: "900", fontSize: 11 },
+  snippetHintRowCaption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  snippetHintTextMuted: { fontWeight: "800", fontSize: 11 },
+  pageRetention: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  retentionNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  retentionNoteText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: "600",
+    lineHeight: 16,
+  },
   systemMilestone: {
     marginTop: 10,
     borderRadius: 16,

@@ -15,6 +15,7 @@ import { BlurView } from "expo-blur";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { notifySessionTokenCommitted } from "../../src/auth/sessionTokenBridge";
+import { notifyStoredUserUpdated } from "../../src/auth/userSessionBridge";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { resendVerification } from "../../src/services/authService";
 import { apiClient } from "../../src/utils/apiClient";
@@ -85,6 +86,7 @@ export default function VerifyEmail() {
         await AsyncStorage.setItem("token", res.token || "");
         await AsyncStorage.setItem("user", JSON.stringify(res.user || {}));
         notifySessionTokenCommitted(res.token || null);
+        notifyStoredUserUpdated();
 
         setMessage("✅ Verified! Redirecting...");
 

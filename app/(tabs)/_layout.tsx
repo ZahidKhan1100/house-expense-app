@@ -20,7 +20,6 @@ import {
   TabBarScrollProvider,
   useTabBarScrollChromeTranslateY,
 } from "../../src/context/TabBarScrollContext";
-
 /** Solid fill behind the tab bar (Android: avoids SVG/fixed-width clipping vs tab items). */
 function TabBarBackgroundFill({ isDark }: { isDark: boolean }) {
   return (

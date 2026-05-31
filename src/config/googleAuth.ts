@@ -50,10 +50,30 @@ export function getGoogleOAuthClientIds(): typeof FALLBACK {
 
 /**
  * True only inside the Expo Go app shell. There, Google must use the Web client + auth.expo.io.
- * Development APK / dev-client / EAS builds use native redirect + androidClientId / iosClientId
- * (see Google Cloud: Android OAuth client + SHA-1; redirect `com.ihabimate.habimate:/oauthredirect`).
- * If Google shows “custom URI scheme is not enabled”, open that Android client in Cloud Console
- * → Advanced settings → enable custom URI scheme (required for new Android clients since Oct 2023).
+ * Development APK / dev-client / EAS builds use native redirect + androidClientId / iosClientId.
+ *
+ * --------------------------------------------------------------------------------------------
+ * Android: “Please wait…” then browser stays on google.com (redirect never returns to the app)
+ * --------------------------------------------------------------------------------------------
+ * Google must trust the **exact keystore** that signed that APK (iOS simulator working does not
+ * prove Android is configured — iOS uses a different OAuth client + URL scheme).
+ *
+ * 1. Google Cloud Console → APIs & Services → Credentials → **Android** OAuth 2.0 Client ID
+ *    (same client id as `androidClientId` / `GOOGLE_ANDROID_CLIENT_ID` on Laravel).
+ *    - Application type: Android
+ *    - Package name: `com.ihabimate.habimate` (must match `expo.android.package`)
+ *    - **SHA-1 certificate fingerprint:** must include the key used to sign **this** APK:
+ *        • **EAS build:** Expo dashboard → Project → Credentials → Android → open keystore →
+ *          copy **SHA-1 Fingerprint** (add it to the Android OAuth client; dev + release may differ).
+ *        • **Local debug:** `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey
+ *          -storepass android -keypass android` → SHA1 line.
+ *    - **Custom URI scheme:** on that Android client, Advanced / OAuth settings → enable custom URI
+ *      scheme (required for many clients since ~2023).
+ *
+ * 2. After adding fingerprints, wait a few minutes and **reinstall** the app (or rebuild the APK).
+ *
+ * Redirect in this app: `com.ihabimate.habimate:/oauthredirect` (see `getGoogleIdTokenAuthRequestOptions`).
+ * --------------------------------------------------------------------------------------------
  */
 export function shouldUseGoogleAuthProxy(): boolean {
   return Constants.appOwnership === "expo";
@@ -69,6 +89,8 @@ export function getGoogleIosReversedOauthRedirectUri(iosClientId: string): strin
   const idPart = iosClientId.replace(/\.apps\.googleusercontent\.com$/i, "");
   return `com.googleusercontent.apps.${idPart}:/oauthredirect`;
 }
+
+let lastGoogleAuthRedirectLogKey = "";
 
 /** Options for Google.useIdTokenAuthRequest(...) */
 export function getGoogleIdTokenAuthRequestOptions() {
@@ -103,7 +125,11 @@ export function getGoogleIdTokenAuthRequestOptions() {
           return `${pkg}:/oauthredirect`;
         })();
   if (__DEV__) {
-    console.log("[googleAuth] redirectUri:", redirectUri, "proxy:", useProxy);
+    const key = `${redirectUri}|${useProxy}`;
+    if (key !== lastGoogleAuthRedirectLogKey) {
+      lastGoogleAuthRedirectLogKey = key;
+      console.log("[googleAuth] redirectUri:", redirectUri, "proxy:", useProxy);
+    }
   }
   return {
     expoClientId: ids.expoClientId,

@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSettlementLock } from "../../../src/context/SettlementLockContext";
 import { ApiClientError, apiClient } from "../../../src/utils/apiClient";
+import { UserAvatar } from "../../../src/components/UserAvatar";
 import { useTheme } from "../../../src/theme/ThemeContext";
 import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
 
@@ -91,6 +92,7 @@ export default function Payment() {
         const matesWithPaid = (data.mates || []).map((m: any) => ({
           id: m.id,
           name: m.name,
+          avatar_url: m.avatar_url,
           total_paid: data.paid_amounts?.[m.id] || 0,
         }));
 
@@ -614,7 +616,19 @@ export default function Payment() {
             >
               <View style={styles.mateHeader}>
                 <View style={styles.mateAvatar}>
-                  <Text style={styles.avatarText}>{m.name.charAt(0)}</Text>
+                  <UserAvatar
+                    name={m.name ?? "?"}
+                    avatarUrl={
+                      typeof m.avatar_url === "string"
+                        ? m.avatar_url.trim()
+                        : null
+                    }
+                    size={28}
+                    borderRadius={10}
+                    bg="#FF6A6A20"
+                    letterColor="#FF6A6A"
+                    onPress={() => router.push(`/mate/${m.id}` as any)}
+                  />
                 </View>
                 <Text
                   style={[styles.mateName, { color: colors.text }]}
@@ -846,7 +860,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  avatarText: { color: "#FF6A6A", fontWeight: "800", fontSize: 12 },
   mateName: { fontSize: 14, fontWeight: "700", flex: 1 },
   mateAmount: { fontSize: 18, fontWeight: "900" },
   progressBar: { height: 4, borderRadius: 2, marginTop: 8, overflow: "hidden" },

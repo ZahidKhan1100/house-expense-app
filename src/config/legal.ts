@@ -7,6 +7,8 @@ const WEB_ORIGIN = "https://habimate.com";
 export const LEGAL_URLS = {
   privacy: `${WEB_ORIGIN}/privacy`,
   terms: `${WEB_ORIGIN}/terms`,
+  /** Google Play / policy: public URL for account deletion instructions */
+  deleteAccount: `${WEB_ORIGIN}/delete-account`,
 } as const;
 
 /** Short promise text (matches site “HabiMate promise” intent). */

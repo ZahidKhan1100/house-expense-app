@@ -1,0 +1,17 @@
+diff --git a/node_modules/@shopify/react-native-skia/android/build.gradle b/node_modules/@shopify/react-native-skia/android/build.gradle
+--- a/node_modules/@shopify/react-native-skia/android/build.gradle
++++ b/node_modules/@shopify/react-native-skia/android/build.gradle
+@@ -167,11 +167,8 @@
+         abortOnError false
+     }
+ 
+-    publishing {
+-        singleVariant("release") {
+-            withSourcesJar()
+-        }
+-    }
++    // Omit publishing.singleVariant on AGP 8+: conflicts with prefabPublishing (
++    // "Using singleVariant publishing DSL multiple times"). Not needed for app builds.
+ 
+     sourceSets.main {
+         jniLibs {

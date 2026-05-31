@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Platform,
   Share,
   ActivityIndicator,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import QRCode from "react-native-qrcode-svg";
@@ -15,8 +16,9 @@ import { apiClient } from "../src/utils/apiClient";
 import { buildHouseInviteQrValue } from "../src/utils/houseInviteLink";
 import { useTheme } from "../src/theme/ThemeContext";
 import { useRouter } from "expo-router";
+import { useNavigation } from "@react-navigation/native";
 import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
-import * as MediaLibrary from "expo-media-library";
+import * as Sharing from "expo-sharing";
 
 // Conditional imports for Native specific features
 let RNFS: any;
@@ -25,7 +27,8 @@ let Clipboard: any;
 if (Platform.OS !== "web") {
   try {
     RNFS = require("react-native-fs");
-    Clipboard = require("@react-native-clipboard/clipboard");
+    const clipboardMod = require("@react-native-clipboard/clipboard");
+    Clipboard = clipboardMod.default ?? clipboardMod;
   } catch (e) {
     console.warn("Native modules not available");
   }
@@ -34,6 +37,7 @@ if (Platform.OS !== "web") {
 export default function InviteQR() {
   const { isDark } = useTheme();
   const router = useRouter();
+  const navigation = useNavigation();
 
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(true);
@@ -63,13 +67,21 @@ export default function InviteQR() {
     }
   };
 
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace("/(tabs)/mates");
+  const handleBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
     }
-  };
+    router.replace("/(tabs)/mates");
+  }, [navigation, router]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      handleBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleBack]);
 
   const copyCode = () => {
     if (!code) return;
@@ -87,17 +99,21 @@ export default function InviteQR() {
     if (Platform.OS === "web") return alert("Download not supported on web");
     if (!qrRef.current) return;
 
-    const { status } = await MediaLibrary.requestPermissionsAsync();
-    if (status !== "granted") return Alert.alert("Permission denied");
-
     qrRef.current.toDataURL(async (data: string) => {
       try {
         const path = RNFS.CachesDirectoryPath + "/house_qr.png";
         await RNFS.writeFile(path, data, "base64");
-        await MediaLibrary.saveToLibraryAsync("file://" + path);
-        Alert.alert("Success", "QR Code saved to gallery! 🖼️");
+        const uri = "file://" + path;
+        if (!(await Sharing.isAvailableAsync())) {
+          Alert.alert("Unavailable", "Sharing isn't available on this device.");
+          return;
+        }
+        await Sharing.shareAsync(uri, {
+          mimeType: "image/png",
+          dialogTitle: "Save or share QR code",
+        });
       } catch (err) {
-        Alert.alert("Error", "Could not save QR");
+        Alert.alert("Error", "Could not share QR image");
       }
     });
   };
@@ -128,7 +144,13 @@ export default function InviteQR() {
       {/* --- PREMIUM HEADER --- */}
       {/* --- PREMIUM HEADER --- */}
 <View style={styles.newHeader}>
-  <TouchableOpacity onPress={handleBack} style={styles.circularBackBtn}>
+  <TouchableOpacity
+    onPress={handleBack}
+    style={styles.circularBackBtn}
+    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    accessibilityRole="button"
+    accessibilityLabel="Go back"
+  >
     <FontAwesome5 name="arrow-left" size={16} color="#fff" />
   </TouchableOpacity>
   
@@ -200,7 +222,7 @@ export default function InviteQR() {
                 color={colors.text}
               />
               <Text style={[styles.iconButtonText, { color: colors.text }]}>
-                Save
+                Export
               </Text>
             </TouchableOpacity>
 
@@ -229,6 +251,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 15,
+    zIndex: 10,
+    elevation: 10,
   },
   circularBackBtn: {
     width: 42,

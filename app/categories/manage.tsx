@@ -11,56 +11,46 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Dimensions,
 } from "react-native";
 import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../../src/utils/apiClient";
 import { useKeyboardBottomPadding } from "../../src/hooks/useKeyboardBottomPadding";
+import { useKeyboardHeight } from "../../src/hooks/useKeyboardHeight";
 import { useTheme } from "../../src/theme/ThemeContext";
 import {
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 
-const iconList = [
-  "shopping-cart",
-  "utensils",
-  "bolt",
-  "tint",
-  "wifi",
-  "home",
-  "car",
-  "gift",
-  "apple-alt",
-  "book",
-  "camera",
-  "coffee",
-  "heart",
-  "music",
-  "map",
-  "wallet",
-  "leaf",
-  "phone",
-  "star",
-  "pen",
-  "film",
-  "plug",
-  "bus",
-  "plane",
-  "medkit",
-  "lightbulb",
-  "trash",
-  "tools",
-  "broom",
-  "tshirt",
-];
+import {
+  CATEGORY_ICON_CHOICES,
+  DEFAULT_CATEGORY_ICON,
+  resolveCategoryIcon,
+} from "../../src/constants/categoryIcons";
 
 export default function ManageCategories() {
   const router = useRouter();
   const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const modalKeyboardPad = useKeyboardBottomPadding(24);
+  const keyboardHeight = useKeyboardHeight();
+  const windowHeight = Dimensions.get("window").height;
+
+  /** Room for modal header + search bar; shrink list height when keyboard is open so icons stay reachable. */
+  const iconPickerApproxHeader = 150;
+  const iconListMaxHeight =
+    keyboardHeight > 0
+      ? Math.max(
+          160,
+          windowHeight -
+            keyboardHeight -
+            Math.max(insets.top, 12) -
+            iconPickerApproxHeader,
+        )
+      : 350;
 
   const colors = {
     bg: isDark ? "#0F172A" : "#F8FAFC",
@@ -77,7 +67,7 @@ export default function ManageCategories() {
   const [modalMode, setModalMode] = useState<"form" | "icon">("form");
   const [iconSearch, setIconSearch] = useState("");
   const [newName, setNewName] = useState("");
-  const [selectedIcon, setSelectedIcon] = useState("shopping-cart");
+  const [selectedIcon, setSelectedIcon] = useState(DEFAULT_CATEGORY_ICON);
   const [editingCategory, setEditingCategory] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -200,7 +190,7 @@ export default function ManageCategories() {
                 ]}
               >
                 <FontAwesome5
-                  name={item.icon}
+                  name={resolveCategoryIcon(item.icon)}
                   size={18}
                   color={colors.primary}
                 />
@@ -239,7 +229,7 @@ export default function ManageCategories() {
       <Modal visible={modalVisible} animationType="slide" transparent>
         <KeyboardAvoidingView
           style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior="padding"
           keyboardVerticalOffset={0}
         >
           <View style={styles.overlay}>
@@ -340,7 +330,14 @@ export default function ManageCategories() {
                   </TouchableOpacity>
                 </ScrollView>
               ) : (
-                <View style={{ maxHeight: 450 }}>
+                <View
+                  style={{
+                    maxHeight:
+                      keyboardHeight > 0
+                        ? iconPickerApproxHeader + iconListMaxHeight
+                        : Math.min(450, windowHeight * 0.65),
+                  }}
+                >
                   <View style={styles.modalHeader}>
                     <TouchableOpacity
                       onPress={() => setModalMode("form")}
@@ -377,6 +374,7 @@ export default function ManageCategories() {
                     placeholderTextColor={colors.sub}
                     value={iconSearch}
                     onChangeText={setIconSearch}
+                    returnKeyType="search"
                     style={[
                       styles.input,
                       {
@@ -390,11 +388,16 @@ export default function ManageCategories() {
                   />
 
                   <FlatList
-                    data={iconList.filter((i) =>
+                    data={CATEGORY_ICON_CHOICES.filter((i) =>
                       i.toLowerCase().includes(iconSearch.toLowerCase()),
                     )}
                     numColumns={3}
                     keyExtractor={(i) => i}
+                    style={{ flexGrow: 0, maxHeight: iconListMaxHeight }}
+                    nestedScrollEnabled
+                    keyboardDismissMode="on-drag"
+                    keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
                     showsVerticalScrollIndicator={false}
                     renderItem={({ item }) => (
                       <TouchableOpacity

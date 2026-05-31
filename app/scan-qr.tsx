@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,14 @@ import {
   Animated,
   Platform,
   ActivityIndicator,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
+import { useNavigation } from "@react-navigation/native";
 import {
   extractHouseCodeFromQrPayload,
   setPendingHouseCode,
@@ -29,7 +31,24 @@ const innerDimension = width * 0.7;
 
 export default function ScanQR() {
   const router = useRouter();
+  const navigation = useNavigation();
   const webViewRef = useRef<WebView>(null);
+
+  const goBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    router.replace("/(auth)/login");
+  }, [navigation, router]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [goBack]);
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -138,6 +157,15 @@ export default function ScanQR() {
   if (!permission.granted) {
     return (
       <View style={styles.center}>
+        <SafeAreaView style={styles.permissionShell}>
+          <TouchableOpacity
+            style={styles.roundBtn}
+            onPress={goBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="chevron-back" size={24} color="#FFF" />
+          </TouchableOpacity>
+        </SafeAreaView>
         <BlurView intensity={20} style={styles.permissionCard}>
           <Ionicons name="camera-outline" size={60} color="#FF6B6B" />
           <Text style={styles.permissionTitle}>Camera Access</Text>
@@ -163,8 +191,8 @@ export default function ScanQR() {
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
       />
 
-      {/* VIEW FINDER OVERLAY */}
-      <View style={styles.overlay}>
+      {/* VIEW FINDER OVERLAY — box-none so header/footer buttons receive touches */}
+      <View style={styles.overlay} pointerEvents="box-none">
         <View style={styles.unfocusedContainer}></View>
         <View style={styles.middleRow}>
           <View style={styles.unfocusedContainer}></View>
@@ -189,11 +217,12 @@ export default function ScanQR() {
       </View>
 
       {/* CONTROLS */}
-      <SafeAreaView style={styles.uiLayer}>
-        <View style={styles.header}>
+      <SafeAreaView style={styles.uiLayer} pointerEvents="box-none">
+        <View style={styles.header} pointerEvents="auto">
           <TouchableOpacity
             style={styles.roundBtn}
-            onPress={() => router.replace("/(auth)/login")}
+            onPress={goBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <Ionicons name="chevron-back" size={24} color="#FFF" />
           </TouchableOpacity>
@@ -201,7 +230,7 @@ export default function ScanQR() {
           <View style={{ width: 44 }} />
         </View>
 
-        <View style={styles.footer}>
+        <View style={styles.footer} pointerEvents="auto">
           <BlurView intensity={30} tint="dark" style={styles.footerBlur}>
             {isProcessing ? (
               <ActivityIndicator color="#FF6B6B" />
@@ -327,12 +356,28 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
+  permissionShell: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 10,
+  },
+
   // UI Components
-  uiLayer: { flex: 1, justifyContent: "space-between", padding: 20 },
+  uiLayer: {
+    flex: 1,
+    justifyContent: "space-between",
+    padding: 20,
+    zIndex: 10,
+  },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    zIndex: 11,
+    elevation: 11,
   },
   headerTitle: {
     color: "#FFF",

@@ -25,6 +25,7 @@ import { useSettlementLock } from "../../../src/context/SettlementLockContext";
 import { useTheme } from "../../../src/theme/ThemeContext";
 import { useTabBarScrollSync } from "../../../src/context/TabBarScrollContext";
 import { saveExpenseFormCache } from "../../../src/offline/expenseFormCache";
+import { resolveCategoryIcon } from "../../../src/constants/categoryIcons";
 import { apiClient } from "../../../src/utils/apiClient";
 
 const { width } = Dimensions.get("window");
@@ -324,7 +325,7 @@ export default function Dashboard() {
                 >
                   <View style={stylesDynamic.iconCircle}>
                     <FontAwesome5
-                      name={expense.icon || "receipt"}
+                      name={resolveCategoryIcon(expense.icon, "receipt")}
                       size={18}
                       color="#FF6A6A"
                     />

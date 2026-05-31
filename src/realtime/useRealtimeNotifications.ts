@@ -7,6 +7,7 @@ import Constants from "expo-constants";
 
 import { API_BASE_URL } from "../config/api";
 import { apiClient } from "../utils/apiClient";
+import { notifyStoredUserUpdated } from "../auth/userSessionBridge";
 import { bindChannelDebug, createPusherClient } from "./realtimeClient";
 import { showWebNotification } from "./webNotifications";
 
@@ -286,6 +287,7 @@ export function useRealtimeNotifications(token: string | null) {
                 karma_balance: bal ?? u.karma_balance,
               };
               await AsyncStorage.setItem("user", JSON.stringify(next));
+              notifyStoredUserUpdated();
             } catch {
               // ignore
             }
